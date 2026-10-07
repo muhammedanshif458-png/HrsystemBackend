@@ -16,7 +16,7 @@ mongoose.connection.on('error', (err) => {
 });
 
 const connectDB = async (customUri = null) => {
-  const uri = customUri || env.mongodbUri;
+  const uri = customUri || process.env.MONGODB_URI || env.mongodbUri;
   
   try {
     const conn = await mongoose.connect(uri);
