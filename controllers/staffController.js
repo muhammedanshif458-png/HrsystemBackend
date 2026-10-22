@@ -82,7 +82,7 @@ class StaffController {
    */
   async applyLeave(req, res, next) {
     try {
-      const leave = await staffService.applyLeave(req.user, req.body);
+      const leave = await staffService.applyLeave(req.user, req.body, req.file);
       return sendSuccess(res, 'Leave request submitted successfully', leave, 201);
     } catch (err) {
       next(err);

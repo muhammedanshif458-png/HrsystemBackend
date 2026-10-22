@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 const path = require('path');
 const fs = require('fs');
 const HRDocument = require('../models/HRDocument');
@@ -161,22 +161,48 @@ class DocumentService {
    * Get document file for download/preview with authorization check
    */
   async getDocumentFile(docId, user) {
+    if (!docId || !mongoose.Types.ObjectId.isValid(docId)) {
+      throw new AppError('Invalid document ID', 400);
+    }
+
     const document = await HRDocument.findById(docId).populate('employee');
     if (!document) {
       throw new AppError('Document not found', 404);
     }
 
-    // Role check: HR can view any employee document.
+    // Role check: HR and SUPER_ADMIN can view any employee document.
     // Staff can only view documents belonging to their own employee profile.
     if (user.role === 'STAFF') {
       const staffEmp = await Employee.findOne({ user: user._id });
-      if (!staffEmp || String(staffEmp._id) !== String(document.employee._id)) {
+      const docEmpId = document.employee?._id || document.employee;
+      if (!staffEmp || String(staffEmp._id) !== String(docEmpId)) {
         throw new AppError('You are not authorized to access this document', 403);
       }
     }
+    // HR and SUPER_ADMIN bypass ownership check (they can view any employee's documents)
 
-    const absolutePath = path.join(__dirname, '..', document.filePath.replace(/^\//, ''));
-    if (!fs.existsSync(absolutePath)) {
+    let absolutePath = null;
+    if (document.filePath) {
+      if (path.isAbsolute(document.filePath) && fs.existsSync(document.filePath)) {
+        absolutePath = document.filePath;
+      } else {
+        const cleanRel = document.filePath.replace(/^[/\\]+/, '');
+        const candidate = path.resolve(__dirname, '..', cleanRel);
+        if (fs.existsSync(candidate)) {
+          absolutePath = candidate;
+        }
+      }
+    }
+
+    // Fallback: search in uploads/documents by fileName
+    if (!absolutePath && document.fileName) {
+      const fallback = path.join(__dirname, '..', 'uploads', 'documents', document.fileName);
+      if (fs.existsSync(fallback)) {
+        absolutePath = fallback;
+      }
+    }
+
+    if (!absolutePath || !fs.existsSync(absolutePath)) {
       throw new AppError('Document file does not exist on disk', 404);
     }
 

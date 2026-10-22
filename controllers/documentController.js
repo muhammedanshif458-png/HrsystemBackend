@@ -88,7 +88,7 @@ class DocumentController {
   }
 
   /**
-   * GET /api/hr/documents/:docId/download
+   * GET /api/hr/documents/:docId/download  OR  /api/staff/documents/:docId/download
    * Download / preview document with authorization
    */
   async downloadDocument(req, res, next) {
@@ -97,9 +97,38 @@ class DocumentController {
 
       const { document, absolutePath } = await documentService.getDocumentFile(docId, req.user);
 
-      res.setHeader('Content-Type', document.fileType);
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.originalName)}"`);
-      return res.sendFile(absolutePath);
+      // Determine appropriate MIME Content-Type
+      let contentType = document.fileType;
+      const originalName = document.originalName || document.fileName || '';
+      const lowerName = originalName.toLowerCase();
+      if (lowerName.endsWith('.pdf')) {
+        contentType = 'application/pdf';
+      } else if (lowerName.endsWith('.png')) {
+        contentType = 'image/png';
+      } else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) {
+        contentType = 'image/jpeg';
+      }
+      if (!contentType || contentType === 'application/octet-stream') {
+        contentType = lowerName.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream';
+      }
+
+      // Determine disposition based on query param (?download=true forces attachment)
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      const dispositionType = isDownload ? 'attachment' : 'inline';
+      const safeFilename = (originalName || 'document.pdf').replace(/["\r\n\\]/g, '_');
+      const disposition = `${dispositionType}; filename="${safeFilename}"`;
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', disposition);
+      // Allow cross-origin access for authenticated document fetches from Flutter Web
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Type, Content-Length, Cross-Origin-Resource-Policy');
+
+      return res.sendFile(absolutePath, (err) => {
+        if (err && !res.headersSent) {
+          next(err);
+        }
+      });
     } catch (err) {
       next(err);
     }

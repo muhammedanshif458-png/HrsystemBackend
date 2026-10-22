@@ -10,7 +10,7 @@ const leaveSchema = new mongoose.Schema(
     leaveType: {
       type: String,
       enum: {
-        values: ['CASUAL', 'SICK', 'ANNUAL', 'UNPAID', 'OTHER'],
+        values: ['CASUAL', 'SICK', 'ANNUAL', 'MEDICAL', 'EARNED', 'UNPAID', 'OTHER'],
         message: '{VALUE} is not a valid leave type'
       },
       required: [true, 'Leave type is required']
@@ -35,6 +35,29 @@ const leaveSchema = new mongoose.Schema(
         message: '{VALUE} is not a valid leave status'
       },
       default: 'PENDING'
+    },
+    document: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'HRDocument',
+      default: null
+    },
+    documentUrl: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    documentName: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    attachment: {
+      fileName: { type: String, default: null },
+      originalName: { type: String, default: null },
+      filePath: { type: String, default: null },
+      fileType: { type: String, default: null },
+      fileSize: { type: Number, default: null },
+      fileUrl: { type: String, default: null }
     },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,

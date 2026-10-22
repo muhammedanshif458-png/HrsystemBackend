@@ -3,9 +3,16 @@
  */
 
 const sendSuccess = (res, message = 'Success', data = null, statusCode = 200, pagination = null) => {
+  // Gracefully handle swapped arguments (data passed as 2nd arg, message string as 3rd arg)
+  if (typeof message !== 'string' && typeof data === 'string') {
+    const temp = message;
+    message = data;
+    data = temp;
+  }
+
   const response = {
     success: true,
-    message,
+    message: typeof message === 'string' ? message : 'Success',
     data: data !== null ? data : []
   };
 

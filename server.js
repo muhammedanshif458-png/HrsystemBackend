@@ -21,8 +21,10 @@ const staffRoutes = require('./routes/staffRoutes');
 // 3. Initialize Express app
 const app = express();
 
-// 4. Enable Helmet for HTTP security headers
-app.use(helmet());
+// 4. Enable Helmet for HTTP security headers (permit cross-origin resource policy for documents & media)
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 
 // 5. Enable CORS
 const defaultAllowedOrigins = [
@@ -58,7 +60,7 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-  exposedHeaders: ['Content-Disposition'],
+  exposedHeaders: ['Content-Disposition', 'Content-Type', 'Content-Length', 'Cross-Origin-Resource-Policy'],
   optionsSuccessStatus: 204
 };
 
@@ -76,8 +78,19 @@ if (env.nodeEnv !== 'test') {
   app.use(morgan(env.isProduction ? 'combined' : 'dev'));
 }
 
-// Serve uploads folder statically if needed
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve uploads folder statically – but protect /uploads/documents/ (medical files etc.)
+// Medical documents must be accessed through authenticated API endpoints:
+//   Staff: GET /api/staff/documents/:docId/download
+//   HR:    GET /api/hr/documents/:docId/download
+app.use('/uploads', (req, res, next) => {
+  if (req.path.startsWith('/documents/') || req.path === '/documents') {
+    return res.status(403).json({
+      success: false,
+      message: 'Document access requires authentication. Use the document download API endpoint.'
+    });
+  }
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

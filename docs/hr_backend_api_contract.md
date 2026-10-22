@@ -255,9 +255,21 @@ Error format:
 ## 7. Leave Management
 
 ### `POST /api/staff/leaves`
-- **Auth:** STAFF
-- **Body:** `{ "leaveType": "CASUAL|SICK|ANNUAL|UNPAID|OTHER", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "reason": "..." }`
-- **Success (201):** Creates leave in `PENDING` state; rejects overlapping active leave requests with `409 Conflict`.
+- **Auth:** STAFF (Resolved strictly from JWT, never client-supplied employee ID)
+- **Content-Type:** `application/json` or `multipart/form-data`
+- **Body / Fields:**
+  - `leaveType` (string, required): `CASUAL`, `SICK`, `ANNUAL`, `MEDICAL`, `UNPAID`, `OTHER` (accepts Flutter/client variations e.g. `Casual Leave`, `Sick Leave`, `Earned Leave`, `Medical Leave`, `Annual Leave` and normalizes automatically)
+  - `startDate` or `fromDate` (ISO date string, required): `YYYY-MM-DD`
+  - `endDate` or `toDate` (ISO date string, required): `YYYY-MM-DD` (must not be earlier than `startDate`)
+  - `reason` (string, required): 2 to 500 characters
+  - `file` / `document` / `medicalProof` (file, optional): PDF, JPG, JPEG, PNG up to 15MB. Automatically stored securely in `uploads/documents/`, registered as an `HRDocument` (category `Medical Certificate`), and linked to the leave.
+  - `documentId` (ObjectId, optional): Reference to an existing staff HRDocument.
+  - `documentUrl` (string, optional): Valid server-accessible document URL.
+  - `documentName` (string, optional): Document display name label.
+- **Success (201):** Returns created Leave object with `status: 'PENDING'`, normalized `leaveType`, and optional `document` / `attachment` metadata.
+- **Error (422):** Structured field-level validation errors.
+- **Error (409):** Overlapping active leave period conflict.
+- **Error (400):** Invalid date order or disallowed file type/size.
 
 ### `GET /api/staff/leaves`
 - **Auth:** STAFF

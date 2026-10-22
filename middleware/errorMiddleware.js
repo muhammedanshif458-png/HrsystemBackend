@@ -79,7 +79,15 @@ const errorMiddleware = (err, req, res, next) => {
     return sendValidationError(res, err.errors, err.message || 'Validation failed');
   }
 
-  // 6. Operational AppError with specified status code
+  // 6. Multer Errors
+  if (err.name === 'MulterError') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return sendError(res, 'File size exceeds 15MB limit', null, 400);
+    }
+    return sendError(res, err.message || 'File upload failed', null, 400);
+  }
+
+  // 7. Operational AppError with specified status code
   const message = err.message || 'Internal Server Error';
 
   // In production, do not leak internal system details for 500 errors

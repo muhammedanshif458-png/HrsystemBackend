@@ -4,6 +4,7 @@ const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const { AppError } = require('../middleware/errorMiddleware');
+const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
 /**
  * Helper to normalize date to UTC midnight
@@ -622,6 +623,7 @@ class HRService {
       Leave.find(filter)
         .populate('employee', 'employeeId firstName lastName department designation email')
         .populate('approvedBy', 'firstName lastName email role')
+        .populate('document')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -632,7 +634,7 @@ class HRService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      leaves,
+      leaves: enrichLeaveResponses(leaves, 'hr'),
       pagination: { page, limit, total, totalPages }
     };
   }
@@ -647,20 +649,28 @@ class HRService {
 
     const leave = await Leave.findById(id)
       .populate('employee', 'employeeId firstName lastName department designation email')
-      .populate('approvedBy', 'firstName lastName email role');
+      .populate('approvedBy', 'firstName lastName email role')
+      .populate('document');
 
     if (!leave) {
       throw new AppError('Leave request not found', 404);
     }
 
-    return leave;
+    return enrichLeaveResponse(leave, 'hr');
   }
 
   /**
    * Approve leave request
    */
   async approveLeave(id, adminUserId) {
-    const leave = await this.getLeaveById(id);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new AppError('Invalid leave ID', 400);
+    }
+
+    const leave = await Leave.findById(id);
+    if (!leave) {
+      throw new AppError('Leave request not found', 404);
+    }
 
     if (leave.status !== 'PENDING') {
       throw new AppError(`Cannot approve leave request with status: ${leave.status}`, 400);
@@ -672,16 +682,26 @@ class HRService {
     leave.rejectionReason = null;
     await leave.save();
 
-    return await Leave.findById(leave._id)
+    const updated = await Leave.findById(leave._id)
       .populate('employee', 'employeeId firstName lastName department designation')
-      .populate('approvedBy', 'firstName lastName email');
+      .populate('approvedBy', 'firstName lastName email')
+      .populate('document');
+
+    return enrichLeaveResponse(updated, 'hr');
   }
 
   /**
    * Reject leave request
    */
   async rejectLeave(id, adminUserId, rejectionReason = '') {
-    const leave = await this.getLeaveById(id);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new AppError('Invalid leave ID', 400);
+    }
+
+    const leave = await Leave.findById(id);
+    if (!leave) {
+      throw new AppError('Leave request not found', 404);
+    }
 
     if (leave.status !== 'PENDING') {
       throw new AppError(`Cannot reject leave request with status: ${leave.status}`, 400);
@@ -693,9 +713,12 @@ class HRService {
     leave.rejectionReason = rejectionReason || 'Leave request was not approved by HR.';
     await leave.save();
 
-    return await Leave.findById(leave._id)
+    const updated = await Leave.findById(leave._id)
       .populate('employee', 'employeeId firstName lastName department designation')
-      .populate('approvedBy', 'firstName lastName email');
+      .populate('approvedBy', 'firstName lastName email')
+      .populate('document');
+
+    return enrichLeaveResponse(updated, 'hr');
   }
 
   /**

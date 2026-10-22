@@ -65,21 +65,78 @@ const checkOutValidator = [
   validate
 ];
 
+/**
+ * Normalizes frontend leave types ('Casual Leave', 'Sick Leave', 'Earned Leave', 'Medical Leave', etc.)
+ * to canonical uppercase enum values understood across backend models and services.
+ */
+const normalizeLeaveType = (type) => {
+  if (!type || typeof type !== 'string') return type;
+  const upper = type.trim().toUpperCase();
+  switch (upper) {
+    case 'CASUAL':
+    case 'CASUAL LEAVE':
+      return 'CASUAL';
+    case 'SICK':
+    case 'SICK LEAVE':
+      return 'SICK';
+    case 'ANNUAL':
+    case 'ANNUAL LEAVE':
+    case 'EARNED':
+    case 'EARNED LEAVE':
+      return 'ANNUAL';
+    case 'MEDICAL':
+    case 'MEDICAL LEAVE':
+      return 'MEDICAL';
+    case 'UNPAID':
+    case 'UNPAID LEAVE':
+      return 'UNPAID';
+    case 'OTHER':
+    case 'OTHER LEAVE':
+      return 'OTHER';
+    default:
+      return upper;
+  }
+};
+
 const applyLeaveValidator = [
+  (req, res, next) => {
+    if (req.body) {
+      if (!req.body.startDate && req.body.fromDate) {
+        req.body.startDate = req.body.fromDate;
+      }
+      if (!req.body.endDate && req.body.toDate) {
+        req.body.endDate = req.body.toDate;
+      }
+      if (req.body.leaveType) {
+        req.body.leaveType = normalizeLeaveType(req.body.leaveType);
+      }
+    }
+    next();
+  },
   body('leaveType')
     .trim()
     .notEmpty().withMessage('Leave type is required')
-    .isIn(['CASUAL', 'SICK', 'ANNUAL', 'UNPAID', 'OTHER'])
-    .withMessage('Leave type must be CASUAL, SICK, ANNUAL, UNPAID, or OTHER'),
+    .isIn(['CASUAL', 'SICK', 'ANNUAL', 'MEDICAL', 'EARNED', 'UNPAID', 'OTHER'])
+    .withMessage('Leave type must be CASUAL, SICK, ANNUAL, MEDICAL, UNPAID, or OTHER'),
   body('startDate')
     .notEmpty().withMessage('Start date is required')
-    .isISO8601().withMessage('Start date must be a valid date (YYYY-MM-DD)'),
+    .isISO8601().withMessage('Start date must be a valid date (YYYY-MM-DD)')
+    .custom((val) => {
+      const d = new Date(val);
+      if (isNaN(d.getTime())) {
+        throw new Error('Start date must be a valid date (YYYY-MM-DD)');
+      }
+      return true;
+    }),
   body('endDate')
     .notEmpty().withMessage('End date is required')
     .isISO8601().withMessage('End date must be a valid date (YYYY-MM-DD)')
     .custom((endDate, { req }) => {
       const start = new Date(req.body.startDate);
       const end = new Date(endDate);
+      if (isNaN(end.getTime())) {
+        throw new Error('End date must be a valid date (YYYY-MM-DD)');
+      }
       if (end < start) {
         throw new Error('End date cannot be earlier than start date');
       }
@@ -88,7 +145,24 @@ const applyLeaveValidator = [
   body('reason')
     .trim()
     .notEmpty().withMessage('Reason for leave is required')
-    .isLength({ min: 5, max: 500 }).withMessage('Reason must be between 5 and 500 characters'),
+    .isLength({ min: 2, max: 500 }).withMessage('Reason must be between 2 and 500 characters'),
+  body('documentId')
+    .optional({ nullable: true })
+    .isMongoId().withMessage('Invalid document ID format'),
+  body('documentUrl')
+    .optional({ nullable: true })
+    .custom((val) => {
+      if (!val) return true;
+      if (typeof val !== 'string') throw new Error('Document URL must be a string');
+      if (/^[a-zA-Z]:[\\\/]/.test(val) || /^file:\/\//i.test(val) || /^content:\/\//i.test(val)) {
+        throw new Error('Local client paths are not valid server document URLs');
+      }
+      return true;
+    }),
+  body('documentName')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 255 }).withMessage('Document name must be under 255 characters'),
   validate
 ];
 
@@ -99,6 +173,7 @@ const leaveIdParamValidator = [
 ];
 
 module.exports = {
+  normalizeLeaveType,
   updateProfileValidator,
   checkInValidator,
   checkOutValidator,

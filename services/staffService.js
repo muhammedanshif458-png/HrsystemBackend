@@ -4,6 +4,7 @@ const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const { AppError } = require('../middleware/errorMiddleware');
+const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
 /**
  * Normalize date to UTC midnight for consistent daily tracking
@@ -268,7 +269,17 @@ class StaffService {
   /**
    * Apply for leave
    */
-  async applyLeave(user, { leaveType, startDate, endDate, reason }) {
+  async applyLeave(user, body, file = null) {
+    const {
+      leaveType,
+      startDate,
+      endDate,
+      reason,
+      documentId,
+      documentUrl,
+      documentName,
+      documentTitle
+    } = body;
     const employee = await this.getEmployeeOrThrow(user);
 
     const start = new Date(startDate);
@@ -298,17 +309,117 @@ class StaffService {
       );
     }
 
+    let attachedDocId = null;
+    let finalDocUrl = null;
+    let finalDocName = null;
+    let attachmentObj = null;
+
+    if (file) {
+      const HRDocument = require('../models/HRDocument');
+      const hrDoc = new HRDocument({
+        employee: employee._id,
+        employeeIdString: employee.employeeId || '',
+        title: documentTitle || `${leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Leave Attachment'} - ${employee.firstName || ''} ${employee.lastName || ''}`.trim(),
+        category: leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Other',
+        description: reason || 'Leave attachment document',
+        fileName: file.filename,
+        originalName: file.originalname,
+        filePath: `/uploads/documents/${file.filename}`,
+        fileType: file.mimetype,
+        fileSize: file.size,
+        uploadedBy: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || 'Staff',
+        uploadedByUserId: user._id,
+        status: 'ACTIVE'
+      });
+      await hrDoc.save();
+
+      attachedDocId = hrDoc._id;
+      finalDocUrl = `/uploads/documents/${file.filename}`;
+      finalDocName = file.originalname;
+      attachmentObj = {
+        fileName: file.filename,
+        originalName: file.originalname,
+        filePath: `/uploads/documents/${file.filename}`,
+        fileType: file.mimetype,
+        fileSize: file.size,
+        fileUrl: `/uploads/documents/${file.filename}`
+      };
+    } else if (documentId) {
+      const HRDocument = require('../models/HRDocument');
+      const existingDoc = await HRDocument.findOne({ _id: documentId, employee: employee._id });
+      if (!existingDoc) {
+        throw new AppError('Specified document not found or does not belong to you', 400);
+      }
+      attachedDocId = existingDoc._id;
+      finalDocUrl = existingDoc.filePath;
+      finalDocName = existingDoc.originalName || existingDoc.fileName;
+      attachmentObj = {
+        fileName: existingDoc.fileName,
+        originalName: existingDoc.originalName,
+        filePath: existingDoc.filePath,
+        fileType: existingDoc.fileType,
+        fileSize: existingDoc.fileSize,
+        fileUrl: existingDoc.filePath
+      };
+    } else if (documentUrl) {
+      const fsModule = require('fs');
+      const pathModule = require('path');
+      const cleanPath = documentUrl.replace(/^\/?uploads\/documents\//, '');
+      const fullPath = pathModule.join(__dirname, '..', 'uploads', 'documents', cleanPath);
+      if (fsModule.existsSync(fullPath)) {
+        finalDocUrl = `/uploads/documents/${cleanPath}`;
+        finalDocName = documentName || pathModule.basename(cleanPath);
+        const HRDocument = require('../models/HRDocument');
+        let hrDoc = await HRDocument.findOne({ filePath: finalDocUrl, employee: employee._id });
+        if (!hrDoc) {
+          const ext = pathModule.extname(cleanPath).toLowerCase();
+          const mimeType = ext === '.pdf' ? 'application/pdf' : (ext === '.png' ? 'image/png' : (ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream'));
+          hrDoc = new HRDocument({
+            employee: employee._id,
+            employeeIdString: employee.employeeId || '',
+            title: documentTitle || `${leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Leave Attachment'} - ${employee.firstName || ''} ${employee.lastName || ''}`.trim(),
+            category: leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Other',
+            description: reason || 'Leave attachment document',
+            fileName: cleanPath,
+            originalName: finalDocName,
+            filePath: finalDocUrl,
+            fileType: mimeType,
+            fileSize: fsModule.statSync(fullPath).size,
+            uploadedBy: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || 'Staff',
+            uploadedByUserId: user._id,
+            status: 'ACTIVE'
+          });
+          await hrDoc.save();
+        }
+        attachedDocId = hrDoc._id;
+        attachmentObj = {
+          fileName: cleanPath,
+          originalName: finalDocName,
+          filePath: finalDocUrl,
+          fileType: hrDoc.fileType || 'application/pdf',
+          fileSize: hrDoc.fileSize || fsModule.statSync(fullPath).size,
+          fileUrl: finalDocUrl
+        };
+      } else {
+        throw new AppError('The specified document URL does not correspond to an uploaded server document', 400);
+      }
+    }
+
     const leave = new Leave({
       employee: employee._id,
       leaveType,
       startDate: start,
       endDate: end,
       reason,
-      status: 'PENDING'
+      status: 'PENDING',
+      document: attachedDocId,
+      documentUrl: finalDocUrl,
+      documentName: finalDocName || (documentName ? String(documentName).trim() : null),
+      attachment: attachmentObj
     });
 
     await leave.save();
-    return leave;
+    return enrichLeaveResponse(leave, 'staff');
   }
 
   /**
@@ -327,6 +438,7 @@ class StaffService {
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
         .populate('approvedBy', 'firstName lastName')
+        .populate('document')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -337,7 +449,7 @@ class StaffService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      leaves,
+      leaves: enrichLeaveResponses(leaves, 'staff'),
       pagination: { page, limit, total, totalPages }
     };
   }
@@ -355,13 +467,14 @@ class StaffService {
     const leave = await Leave.findOne({
       _id: leaveId,
       employee: employee._id
-    }).populate('approvedBy', 'firstName lastName email');
+    }).populate('approvedBy', 'firstName lastName email')
+      .populate('document');
 
     if (!leave) {
       throw new AppError('Leave request not found or access unauthorized', 404);
     }
 
-    return leave;
+    return enrichLeaveResponse(leave, 'staff');
   }
 
   /**

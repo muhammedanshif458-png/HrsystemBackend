@@ -6,6 +6,7 @@ const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
+const { leaveAttachmentUpload } = require('../middleware/documentUploadMiddleware');
 const {
   updateProfileValidator,
   checkInValidator,
@@ -39,7 +40,7 @@ router.post('/attendance/check-out', checkOutValidator, staffController.checkOut
 router.get('/attendance', staffController.getAttendance);
 
 // Leaves
-router.post('/leaves', applyLeaveValidator, staffController.applyLeave);
+router.post('/leaves', leaveAttachmentUpload, applyLeaveValidator, staffController.applyLeave);
 router.get('/leaves', staffController.getLeaves);
 router.get('/leaves/:id', leaveIdParamValidator, staffController.getLeaveById);
 router.delete('/leaves/:id', leaveIdParamValidator, staffController.cancelLeave);
@@ -56,4 +57,3 @@ router.delete('/departments/:deptKey/messages/:messageId', chatController.delete
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 
 module.exports = router;
-

@@ -1,4 +1,4 @@
-﻿const multer = require('multer');
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { AppError } = require('./errorMiddleware');
@@ -45,7 +45,44 @@ const documentUpload = multer({
   fileFilter
 });
 
+const leaveAttachmentUpload = (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('multipart/form-data')) {
+    return next();
+  }
+
+  const upload = documentUpload.fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'document', maxCount: 1 },
+    { name: 'medicalDocument', maxCount: 1 },
+    { name: 'medicalCertificate', maxCount: 1 },
+    { name: 'medicalProof', maxCount: 1 },
+    { name: 'attachment', maxCount: 1 }
+  ]);
+
+  upload(req, res, (err) => {
+    if (err) {
+      if (err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') {
+        return next(new AppError('File size exceeds 15MB limit', 400));
+      }
+      return next(err);
+    }
+    if (req.files) {
+      req.file = req.files['document']?.[0]
+        || req.files['file']?.[0]
+        || req.files['medicalDocument']?.[0]
+        || req.files['medicalCertificate']?.[0]
+        || req.files['medicalProof']?.[0]
+        || req.files['attachment']?.[0]
+        || null;
+    }
+    next();
+  });
+};
+
 module.exports = {
   documentUpload,
+  leaveAttachmentUpload,
   uploadDir
 };
+
