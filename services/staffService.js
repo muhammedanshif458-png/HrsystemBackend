@@ -23,7 +23,14 @@ class StaffService {
    * Helper to ensure employee profile exists for user
    */
   async getEmployeeOrThrow(user) {
-    const employee = await Employee.findOne({ user: user._id });
+    let employee = await Employee.findOne({ user: user._id });
+    if (!employee && user.email) {
+      employee = await Employee.findOne({ email: user.email.toLowerCase().trim() });
+      if (employee) {
+        employee.user = user._id;
+        await employee.save();
+      }
+    }
     if (!employee) {
       throw new AppError('No employee profile associated with this account. Please contact HR.', 404);
     }
@@ -120,7 +127,7 @@ class StaffService {
     const employee = await this.getEmployeeOrThrow(user);
 
     // Only allow updating safe fields
-    const allowedFields = ['phone', 'address', 'city', 'state', 'country', 'profileImage', 'emergencyContact'];
+    const allowedFields = ['phone', 'address', 'city', 'state', 'country', 'profileImage', 'emergencyContact', 'dateOfBirth'];
     const userUpdates = {};
 
     allowedFields.forEach((field) => {

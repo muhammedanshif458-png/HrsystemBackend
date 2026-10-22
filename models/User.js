@@ -35,8 +35,8 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: {
-        values: ['HR', 'STAFF'],
-        message: '{VALUE} is not a valid role. Allowed roles: HR, STAFF'
+        values: ['HR', 'STAFF', 'SUPER_ADMIN'],
+        message: '{VALUE} is not a valid role. Allowed roles: HR, STAFF, SUPER_ADMIN'
       },
       required: [true, 'Role is required']
     },
@@ -80,6 +80,10 @@ userSchema.pre('save', async function (next) {
   }
 
   try {
+    // If password is already a valid bcrypt hash, do not hash it again (prevents double-hashing)
+    if (typeof this.password === 'string' && /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(this.password)) {
+      return next();
+    }
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
     next();
@@ -90,7 +94,12 @@ userSchema.pre('save', async function (next) {
 
 // Instance method to compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+  if (!candidatePassword || !this.password) return false;
+  const isMatch = await bcrypt.compare(candidatePassword, this.password);
+  if (!isMatch && typeof candidatePassword === 'string') {
+    return await bcrypt.compare(candidatePassword.trim(), this.password);
+  }
+  return isMatch;
 };
 
 // Transform to remove sensitive information on JSON serialization

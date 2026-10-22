@@ -29,12 +29,13 @@ Production-ready, scalable RESTful API for the **HR Management System** built wi
 
 ## Overview
 
-The HR Management System is partitioned into two clear user roles:
+The HR Management System supports three distinct user roles:
 
-1. **HR**: Manages employees, monitors attendance records, approves/rejects leave requests, and views department-level reports and statistics.
-2. **STAFF**: Views own profile, checks in/out daily, tracks working hours, views personal attendance records, and applies for/cancels leave requests.
+1. **SUPER_ADMIN**: Master administrative authority across the entire platform. Full access to all HR administrative routes, departmental statistics, payroll, document storage, task distribution, and department chat moderation. Restricted from staff self-service to maintain data integrity.
+2. **HR**: Manages employees, monitors attendance records, approves/rejects leave requests, views department-level reports, assigns tasks, and handles payroll.
+3. **STAFF**: Views own profile, checks in/out daily, tracks working hours, views personal attendance records, and applies for/cancels leave requests.
 
-Staff accounts are strictly isolated; a staff member can never view or manipulate another staff member's records.
+Staff accounts are strictly isolated; a staff member can never view or manipulate another staff member's records. Super Admin and HR tokens are rejected from staff self-service endpoints to ensure role isolation.
 
 ---
 
@@ -190,6 +191,33 @@ npm run seed
 ```
 
 This reads `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` from `.env`, hashes the password with bcrypt, and creates both the User and HR Employee profile. Duplicate runs safely exit without duplicating records.
+
+---
+
+## Seeding Dedicated Super Admin Account
+
+Seed the dedicated Super Admin (`lysoftware@gmail.com`, role `SUPER_ADMIN`) safely and idempotently:
+
+```bash
+npm run seed:superadmin
+```
+
+### Environment Configuration:
+```env
+SEED_SUPER_ADMIN_EMAIL=lysoftware@gmail.com
+SEED_SUPER_ADMIN_PASSWORD=hrAdmin
+```
+
+### Safety & Idempotency Rules:
+- If the account does not exist, it creates the User with role `SUPER_ADMIN` and linked `Employee` profile `SA0001`.
+- If the account already exists, it will **not** overwrite the password or role silently. It logs a warning and exits cleanly with code 0.
+- To perform an intentional credential reset, run with the `--reset-password` flag:
+  ```bash
+  node scripts/seedSuperAdmin.js --reset-password
+  # or
+  RESET_SUPER_ADMIN_PASSWORD=true npm run seed:superadmin
+  ```
+- Plaintext passwords and tokens are never printed to console logs or committed to git.
 
 ---
 

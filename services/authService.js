@@ -12,7 +12,8 @@ class AuthService {
    */
   async login(email, password) {
     // Explicitly select password field as it is marked select: false
-    const user = await User.findOne({ email }).select('+password');
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (!user) {
       throw new AppError('Invalid email or password', 401);
@@ -40,7 +41,7 @@ class AuthService {
     // Fetch linked employee profile if user is STAFF
     let employeeData = null;
     if (user.role === 'STAFF') {
-      employeeData = await Employee.findOne({ user: user._id });
+      employeeData = (await Employee.findOne({ user: user._id })) || (await Employee.findOne({ email: user.email }));
     }
 
     const userObj = user.toJSON();

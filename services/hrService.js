@@ -125,17 +125,31 @@ class HRService {
   /**
    * Create new employee and corresponding User account
    */
-  async createEmployee(data) {
+  async createEmployee(data, currentUser = null) {
+    // Support both 'name' (full name from Flutter) and firstName/lastName separately
+    if (!data.firstName && data.name) {
+      const parts = data.name.trim().split(' ');
+      data.firstName = parts[0];
+      data.lastName = parts.slice(1).join(' ') || parts[0];
+    }
+    if (!data.lastName) data.lastName = data.firstName;
+    // Support 'phoneNumber' field from Flutter in addition to 'phone'
+    if (!data.phone && data.phoneNumber) data.phone = data.phoneNumber;
+
     const {
       firstName,
       lastName,
       email,
       phone,
-      password = 'Password@123',
+      password,
       department,
       designation,
       employmentType = 'FULL_TIME',
+      workMode = 'Office',
       salary = 0,
+      salaryCurrency = 'INR',
+      salaryEffectiveDate = '',
+      paidLeaveAllowance = 1,
       dateOfBirth,
       gender,
       address,
@@ -147,10 +161,16 @@ class HRService {
       status = 'ACTIVE'
     } = data;
 
-    // Check if user with email already exists
-    const existingUser = await User.findOne({ email: email.toLowerCase() });
-    if (existingUser) {
-      throw new AppError('An account with this email address already exists', 409);
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new AppError('Email is required', 400);
+    }
+
+    // Check if user or employee with email already exists
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingEmployee = await Employee.findOne({ email: normalizedEmail });
+    if (existingEmployee) {
+      throw new AppError('An employee with this email address already exists', 409);
     }
 
     // Auto-generate employeeId if not provided
@@ -165,57 +185,100 @@ class HRService {
       throw new AppError(`Employee ID '${employeeId}' is already in use`, 409);
     }
 
-    // Create user with STAFF role
-    const newUser = new User({
-      firstName,
-      lastName,
-      email: email.toLowerCase(),
-      phone: phone || '',
-      password,
-      role: 'STAFF',
-      profileImage: profileImage || null,
-      isActive: status === 'ACTIVE'
-    });
+    const finalPassword = (password && String(password).trim().length >= 6)
+      ? String(password).trim()
+      : 'Password@123';
 
-    await newUser.save();
+    let newUser;
+    try {
+      if (existingUser) {
+        const linkedEmp = await Employee.findOne({ user: existingUser._id });
+        if (linkedEmp) {
+          throw new AppError('An account with this email address already exists', 409);
+        }
+        newUser = existingUser;
+        newUser.firstName = firstName;
+        newUser.lastName = lastName;
+        newUser.phone = phone || '';
+        newUser.role = 'STAFF';
+        newUser.isActive = status === 'ACTIVE';
+        if (password && String(password).trim().length >= 6) {
+          newUser.password = String(password).trim();
+        }
+        await newUser.save();
+      } else {
+      // Create user with STAFF role
+      newUser = new User({
+        firstName,
+        lastName,
+        email: normalizedEmail,
+        phone: phone || '',
+        password: finalPassword,
+        role: 'STAFF',
+        profileImage: profileImage || null,
+        isActive: status === 'ACTIVE'
+      });
 
-    // Create employee profile linked to user
-    const newEmployee = new Employee({
-      employeeId,
-      user: newUser._id,
-      firstName,
-      lastName,
-      email: email.toLowerCase(),
-      phone: phone || '',
-      dateOfBirth: dateOfBirth || null,
-      gender: gender || 'OTHER',
-      department,
-      designation,
-      joiningDate: data.joiningDate || new Date(),
-      employmentType,
-      salary,
-      address: address || '',
-      city: city || '',
-      state: state || '',
-      country: country || '',
-      profileImage: profileImage || null,
-      emergencyContact: emergencyContact || { name: '', relationship: '', phone: '' },
-      status
-    });
+      await newUser.save();
+      }
 
-    await newEmployee.save();
+      // Create employee profile linked to user
+      const newEmployee = new Employee({
+        employeeId,
+        user: newUser._id,
+        firstName,
+        lastName,
+        email: normalizedEmail,
+        phone: phone || '',
+        dateOfBirth: (dateOfBirth && dateOfBirth !== '') ? new Date(dateOfBirth) : null,
+        gender: gender || 'OTHER',
+        department,
+        designation,
+        joiningDate: data.joiningDate || new Date(),
+        employmentType,
+        salary,
+        salaryCurrency: salaryCurrency || 'INR',
+        salaryEffectiveDate: salaryEffectiveDate || new Date().toISOString().substring(0, 10),
+        paidLeaveAllowance: paidLeaveAllowance || 1,
+        salaryHistory: salary > 0 ? [{
+          amount: salary,
+          currency: salaryCurrency || 'INR',
+          effectiveDate: salaryEffectiveDate || new Date().toISOString().substring(0, 10),
+          changedBy: currentUser ? `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim() || 'HR Admin' : 'HR Admin',
+          reason: 'Initial Salary on joining',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        }] : [],
+        address: address || '',
+        city: city || '',
+        state: state || '',
+        country: country || '',
+        profileImage: profileImage || null,
+        emergencyContact: emergencyContact || { name: '', relationship: '', phone: '' },
+        status
+      });
 
-    const populatedEmployee = await Employee.findById(newEmployee._id).populate('user', 'role isActive');
-    return populatedEmployee;
+      await newEmployee.save();
+
+      const populatedEmployee = await Employee.findById(newEmployee._id).populate('user', 'role isActive');
+      return populatedEmployee;
+    } catch (err) {
+      if (newUser && newUser._id) {
+        try {
+          await User.findByIdAndDelete(newUser._id);
+        } catch (_) {}
+      }
+      throw err;
+    }
   }
 
   /**
    * Get employee by ID
    */
+  
   async getEmployeeById(id) {
     let query = {};
     if (mongoose.Types.ObjectId.isValid(id)) {
-      query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }] };
+      query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }, { user: id }] };
     } else {
       query = { employeeId: id.toUpperCase() };
     }
@@ -230,10 +293,10 @@ class HRService {
   /**
    * Update employee and synchronize User account
    */
-  async updateEmployee(id, updateData) {
+  async updateEmployee(id, updateData, currentUser = null) {
     let query = {};
     if (mongoose.Types.ObjectId.isValid(id)) {
-      query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }] };
+      query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }, { user: id }] };
     } else {
       query = { employeeId: id.toUpperCase() };
     }
@@ -243,40 +306,145 @@ class HRService {
       throw new AppError('Employee not found', 404);
     }
 
-    // Check if new email is in use by another user
-    if (updateData.email && updateData.email.toLowerCase() !== employee.email) {
-      const existingUser = await User.findOne({
-        email: updateData.email.toLowerCase(),
-        _id: { $ne: employee.user }
-      });
-      if (existingUser) {
-        throw new AppError('Email address is already in use by another account', 409);
+    // Support name/fullName (split into firstName and lastName)
+    const rawName = (updateData.name || updateData.fullName || '').trim();
+    if (rawName) {
+      const parts = rawName.split(/\s+/);
+      updateData.firstName = parts[0];
+      updateData.lastName = parts.slice(1).join(' ') || parts[0];
+    } else if (updateData.firstName && updateData.lastName === undefined) {
+      // If only firstName is provided, preserve existing lastName or fallback
+      if (!employee.lastName) {
+        updateData.lastName = updateData.firstName;
+      }
+    } else if (updateData.firstName && updateData.lastName !== undefined && !String(updateData.lastName).trim()) {
+      updateData.lastName = updateData.firstName;
+    }
+
+    // Support phoneNumber field from Flutter in addition to phone
+    if (!updateData.phone && updateData.phoneNumber !== undefined) {
+      updateData.phone = updateData.phoneNumber;
+    }
+
+    // Check if new email is in use by another user or employee
+    let normalizedEmail = null;
+    if (updateData.email) {
+      normalizedEmail = updateData.email.toLowerCase().trim();
+      if (normalizedEmail !== employee.email) {
+        const existingUser = await User.findOne({
+          email: normalizedEmail,
+          _id: { $ne: employee.user }
+        });
+        if (existingUser) {
+          throw new AppError('Email address is already in use by another account', 409);
+        }
+        const existingEmp = await Employee.findOne({
+          email: normalizedEmail,
+          _id: { $ne: employee._id }
+        });
+        if (existingEmp) {
+          throw new AppError('Email address is already in use by another employee', 409);
+        }
+      } else {
+        normalizedEmail = employee.email;
       }
     }
 
+    // Handle password credential update (Super Admin authorization check)
+    let passwordToUpdate = null;
+    if (updateData.password !== undefined && updateData.password !== null) {
+      const trimmedPwd = String(updateData.password).trim();
+      if (trimmedPwd.length > 0) {
+        // Enforce Super Admin authorization
+        const role = currentUser?.role ? String(currentUser.role).toUpperCase() : '';
+        if (role !== 'SUPER_ADMIN' && role !== 'SUPERADMIN') {
+          throw new AppError('Only Super Admin is authorized to change employee credentials', 403);
+        }
+        if (trimmedPwd.length < 6) {
+          throw new AppError('Password must be at least 6 characters long', 400);
+        }
+        passwordToUpdate = trimmedPwd;
+      }
+    }
+
+    // Synchronize linked User account
+    const userId = (employee.user && employee.user._id) ? employee.user._id : employee.user;
+    let user = null;
+    if (userId) {
+      user = await User.findById(userId);
+    }
+    if (!user && employee.email) {
+      user = await User.findOne({ email: employee.email.toLowerCase().trim() });
+      if (user) {
+        employee.user = user._id;
+      }
+    }
+    if (!user && normalizedEmail) {
+      user = await User.findOne({ email: normalizedEmail });
+      if (user) {
+        employee.user = user._id;
+      }
+    }
+
+    if (!user) {
+      if (passwordToUpdate) {
+        user = new User({
+          firstName: updateData.firstName || employee.firstName,
+          lastName: updateData.lastName || employee.lastName,
+          email: normalizedEmail || employee.email,
+          phone: updateData.phone || employee.phone || '',
+          password: passwordToUpdate,
+          role: 'STAFF',
+          profileImage: updateData.profileImage || employee.profileImage || null,
+          isActive: employee.status === 'ACTIVE'
+        });
+        await user.save();
+        employee.user = user._id;
+      } else {
+        throw new AppError('Linked user login account not found for this employee', 404);
+      }
+    }
+
+    if (updateData.firstName) user.firstName = updateData.firstName;
+    if (updateData.lastName) user.lastName = updateData.lastName;
+    if (normalizedEmail && normalizedEmail !== user.email) {
+      user.email = normalizedEmail;
+    }
+    if (updateData.phone !== undefined) user.phone = updateData.phone;
+    if (updateData.profileImage !== undefined) user.profileImage = updateData.profileImage;
+    if (updateData.status) {
+      user.isActive = updateData.status === 'ACTIVE';
+    }
+    if (passwordToUpdate) {
+      user.password = passwordToUpdate; // triggers pre('save') bcrypt hashing
+      user.refreshToken = null; // Invalidate current session tokens
+    }
+    await user.save();
+
     // Update Employee document fields
+    if (normalizedEmail) {
+      employee.email = normalizedEmail;
+    }
+    if (updateData.dateOfBirth !== undefined) {
+      employee.dateOfBirth = (updateData.dateOfBirth && updateData.dateOfBirth !== '') ? new Date(updateData.dateOfBirth) : null;
+    }
     Object.keys(updateData).forEach((key) => {
-      if (key !== 'user' && key !== '_id' && updateData[key] !== undefined) {
+      if (
+        key !== 'user' &&
+        key !== '_id' &&
+        key !== 'password' &&
+        key !== 'email' &&
+        key !== 'dateOfBirth' &&
+        key !== 'name' &&
+        key !== 'fullName' &&
+        key !== 'phoneNumber' &&
+        updateData[key] !== undefined
+      ) {
         employee[key] = updateData[key];
       }
     });
 
     await employee.save();
-
-    // Synchronize linked User account
-    const userUpdate = {};
-    if (updateData.firstName) userUpdate.firstName = updateData.firstName;
-    if (updateData.lastName) userUpdate.lastName = updateData.lastName;
-    if (updateData.email) userUpdate.email = updateData.email.toLowerCase();
-    if (updateData.phone !== undefined) userUpdate.phone = updateData.phone;
-    if (updateData.profileImage !== undefined) userUpdate.profileImage = updateData.profileImage;
-    if (updateData.status) {
-      userUpdate.isActive = updateData.status === 'ACTIVE';
-    }
-
-    if (Object.keys(userUpdate).length > 0) {
-      await User.findByIdAndUpdate(employee.user, userUpdate);
-    }
 
     return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
   }
@@ -284,6 +452,7 @@ class HRService {
   /**
    * Delete or deactivate employee
    */
+  
   async deleteEmployee(id) {
     const employee = await this.getEmployeeById(id);
 
@@ -295,6 +464,45 @@ class HRService {
 
     return { message: 'Employee deactivated successfully' };
   }
+  /**
+   * Update employee salary with history tracking
+   */
+  async updateSalary(id, salaryData) {
+    const employee = await this.getEmployeeById(id);
+    const {
+      salary,
+      salaryCurrency = 'INR',
+      salaryEffectiveDate = '',
+      changedBy = 'HR Admin',
+      reason = 'Salary Adjustment'
+    } = salaryData;
+
+    if (salary === undefined || salary === null) {
+      throw new AppError('New salary amount is required', 400);
+    }
+    if (salary < 0) {
+      throw new AppError('Salary cannot be negative', 400);
+    }
+
+    const effectiveDateStr = salaryEffectiveDate || new Date().toISOString().substring(0, 10);
+    const historyEntry = {
+      amount: salary,
+      currency: salaryCurrency,
+      effectiveDate: effectiveDateStr,
+      changedBy,
+      reason,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+    };
+
+    employee.salary = salary;
+    employee.salaryCurrency = salaryCurrency;
+    employee.salaryEffectiveDate = effectiveDateStr;
+    employee.salaryHistory = [historyEntry, ...(employee.salaryHistory || [])];
+
+    await employee.save();
+    return await Employee.findById(employee._id).populate('user', 'role isActive');
+  }
+
 
   /**
    * Get attendance records for HR
@@ -603,6 +811,203 @@ class HRService {
       typeSummary: typeCounts
     };
   }
+
+  /**
+   * Get Company-Wide Birthdays (Today & Upcoming within specified days)
+   * Across BOTH Tech & Telecalling departments.
+   * Excludes birth year and sensitive employee data from public staff viewing.
+   */
+  async getCompanyBirthdays(daysAhead = 30, referenceDate = new Date()) {
+    const Employee = require('../models/Employee');
+    const employees = await Employee.find({
+      status: { $in: ['ACTIVE', 'ON_LEAVE', 'PROBATION', 'active', 'on_leave', 'probation'] },
+      dateOfBirth: { $ne: null }
+    }).select('firstName lastName department designation profileImage dateOfBirth employeeId').lean();
+
+    const ref = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+    const currentYear = ref.getFullYear();
+    const currentMonth = ref.getMonth() + 1; // 1-12
+    const currentDay = ref.getDate(); // 1-31
+
+    const isLeapYear = (year) => (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+
+    const todayBirthdays = [];
+    const upcomingBirthdays = [];
+    const seenIds = new Set();
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    // Midnight of reference date in local calendar context
+    const todayMidnight = new Date(currentYear, currentMonth - 1, currentDay, 0, 0, 0, 0);
+
+    for (const emp of employees) {
+      if (!emp.dateOfBirth) continue;
+      const empIdStr = (emp._id || emp.employeeId || '').toString();
+      if (seenIds.has(empIdStr)) continue;
+      seenIds.add(empIdStr);
+
+      let bMonth, bDay;
+      if (emp.dateOfBirth instanceof Date) {
+        bMonth = emp.dateOfBirth.getUTCMonth() + 1;
+        bDay = emp.dateOfBirth.getUTCDate();
+      } else if (typeof emp.dateOfBirth === 'string') {
+        const parts = emp.dateOfBirth.split('T')[0].split('-');
+        if (parts.length >= 3) {
+          bMonth = parseInt(parts[1], 10);
+          bDay = parseInt(parts[2], 10);
+        } else {
+          const d = new Date(emp.dateOfBirth);
+          if (isNaN(d.getTime())) continue;
+          bMonth = d.getUTCMonth() + 1;
+          bDay = d.getUTCDate();
+        }
+      } else {
+        const d = new Date(emp.dateOfBirth);
+        if (isNaN(d.getTime())) continue;
+        bMonth = d.getUTCMonth() + 1;
+        bDay = d.getUTCDate();
+      }
+
+      if (!bMonth || !bDay || isNaN(bMonth) || isNaN(bDay)) continue;
+
+      // Determine celebrated day in current year:
+      // If born on Feb 29 and current year is non-leap, celebrate on Feb 28
+      let celebratedDayThisYear = bDay;
+      if (bMonth === 2 && bDay === 29 && !isLeapYear(currentYear)) {
+        celebratedDayThisYear = 28;
+      }
+
+      const celebrationDateThisYear = new Date(currentYear, bMonth - 1, celebratedDayThisYear, 0, 0, 0, 0);
+
+      let targetCelebrationDate;
+      let effectiveDay = celebratedDayThisYear;
+
+      if (celebrationDateThisYear.getTime() === todayMidnight.getTime()) {
+        targetCelebrationDate = celebrationDateThisYear;
+        effectiveDay = celebratedDayThisYear;
+      } else if (celebrationDateThisYear > todayMidnight) {
+        targetCelebrationDate = celebrationDateThisYear;
+        effectiveDay = celebratedDayThisYear;
+      } else {
+        // Celebration in current year has passed; next celebration is in currentYear + 1
+        const nextYear = currentYear + 1;
+        let celebratedDayNextYear = bDay;
+        if (bMonth === 2 && bDay === 29 && !isLeapYear(nextYear)) {
+          celebratedDayNextYear = 28;
+        }
+        targetCelebrationDate = new Date(nextYear, bMonth - 1, celebratedDayNextYear, 0, 0, 0, 0);
+        effectiveDay = celebratedDayNextYear;
+      }
+
+      const diffMs = targetCelebrationDate.getTime() - todayMidnight.getTime();
+      const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+      const isToday = (diffDays === 0);
+
+      const fullName = `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || 'Employee';
+
+      const birthdayRecord = {
+        id: (emp._id || emp.employeeId).toString(),
+        employeeId: emp.employeeId || '',
+        name: fullName,
+        department: emp.department || 'Unassigned',
+        designation: emp.designation || '',
+        profileImage: emp.profileImage || null,
+        birthdayFormatted: `${monthNames[bMonth - 1]} ${effectiveDay}`,
+        birthdayMonth: bMonth,
+        birthdayDay: effectiveDay,
+        daysUntil: diffDays,
+        isToday: isToday
+      };
+
+      if (isToday) {
+        todayBirthdays.push(birthdayRecord);
+      } else if (diffDays > 0 && diffDays <= daysAhead) {
+        upcomingBirthdays.push(birthdayRecord);
+      }
+    }
+
+    // Sort upcoming birthdays by daysUntil ascending
+    upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
+    // Sort today's birthdays by name
+    todayBirthdays.sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+      today: todayBirthdays,
+      upcoming: upcomingBirthdays,
+      totalToday: todayBirthdays.length,
+      totalUpcoming: upcomingBirthdays.length
+    };
+  }
+
+  /**
+   * Update employee status (PATCH /api/hr/employees/:id/status)
+   */
+  async updateEmployeeStatus(id, newStatus) {
+    const validStatuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'];
+    if (!validStatuses.includes(newStatus)) {
+      throw new AppError(`Invalid status '${newStatus}'. Allowed: ${validStatuses.join(', ')}`, 400);
+    }
+
+    const employee = await this.getEmployeeById(id);
+    employee.status = newStatus;
+    await employee.save();
+
+    // Sync user active flag
+    if (newStatus === 'ACTIVE') {
+      await User.findByIdAndUpdate(employee.user, { isActive: true });
+    } else {
+      await User.findByIdAndUpdate(employee.user, { isActive: false });
+    }
+
+    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+  }
+
+  /**
+   * Get Departments & Headcounts (GET /api/hr/departments)
+   */
+  async getDepartments() {
+    const employees = await Employee.find({ status: { $ne: 'TERMINATED' } }).lean();
+
+    const techStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tech') || (e.department || '').toLowerCase().includes('engineering'));
+    const teleStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tele') || (e.department || '').toLowerCase().includes('client'));
+
+    return [
+      {
+        deptKey: 'tech',
+        title: 'Tech & Engineering',
+        subtitle: 'Frontend, Backend, Infrastructure & QA',
+        staffCount: techStaff.length,
+        activeCount: techStaff.filter(s => s.status === 'ACTIVE').length,
+        leadName: 'Anita Rao (Lead HR / Tech Ops)',
+        icon: 'computer',
+        color: '#2563EB'
+      },
+      {
+        deptKey: 'telecalling',
+        title: 'Telecalling & Client Relations',
+        subtitle: 'Candidate Outreach, Lead Calling & Customer Support',
+        staffCount: teleStaff.length,
+        activeCount: teleStaff.filter(s => s.status === 'ACTIVE').length,
+        leadName: 'Neha Sharma (Operations Senior)',
+        icon: 'headset_mic',
+        color: '#DB2777'
+      }
+    ];
+  }
+
+  /**
+   * Get Single Department details (GET /api/hr/departments/:deptKey)
+   */
+  async getDepartmentByKey(deptKey) {
+    const departments = await this.getDepartments();
+    const key = (deptKey || '').toLowerCase();
+    const dept = departments.find(d => d.deptKey === key || d.title.toLowerCase().includes(key));
+    if (!dept) {
+      throw new AppError(`Department '${deptKey}' not found`, 404);
+    }
+    return dept;
+  }
 }
 
 module.exports = new HRService();
+

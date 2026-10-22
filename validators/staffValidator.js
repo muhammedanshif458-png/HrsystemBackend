@@ -20,6 +20,20 @@ const updateProfileValidator = [
   body('profileImage')
     .optional()
     .trim(),
+  body('dateOfBirth')
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === '' || value === undefined) return true;
+      if (typeof value === 'boolean') throw new Error('Date of birth must be a valid date');
+      const d = new Date(value);
+      if (isNaN(d.getTime())) {
+        throw new Error('Date of birth must be a valid date');
+      }
+      if (d > new Date()) {
+        throw new Error('Date of birth cannot be in the future');
+      }
+      return true;
+    }),
   body('emergencyContact')
     .optional()
     .isObject().withMessage('Emergency contact must be an object'),

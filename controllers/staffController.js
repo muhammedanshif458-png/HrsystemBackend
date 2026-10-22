@@ -124,6 +124,20 @@ class StaffController {
       next(err);
     }
   }
+  /**
+   * GET /api/staff/birthdays
+   * Company-wide birthdays for staff view
+   */
+  async getBirthdays(req, res, next) {
+    try {
+      const hrService = require('../services/hrService');
+      const daysAhead = req.query.daysAhead !== undefined ? parseInt(req.query.daysAhead, 10) : 30;
+      const birthdays = await hrService.getCompanyBirthdays(daysAhead);
+      return sendSuccess(res, 'Company birthdays fetched successfully', birthdays);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new StaffController();

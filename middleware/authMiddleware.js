@@ -45,8 +45,15 @@ const authMiddleware = async (req, res, next) => {
 
     // If STAFF, attach employee record to request for convenience and security
     if (user.role === 'STAFF') {
-      const employee = await Employee.findOne({ user: user._id });
-      req.employee = employee; // can be null if not yet linked
+      let employee = await Employee.findOne({ user: user._id });
+      if (!employee && user.email) {
+        employee = await Employee.findOne({ email: user.email.toLowerCase().trim() });
+        if (employee) {
+          employee.user = user._id;
+          await employee.save();
+        }
+      }
+      req.employee = employee;
     }
 
     next();

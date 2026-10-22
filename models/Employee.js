@@ -93,11 +93,42 @@ const employeeSchema = new mongoose.Schema(
       },
       default: 'FULL_TIME'
     },
+    workMode: {
+      type: String,
+      trim: true,
+      default: 'Office'
+    },
     salary: {
       type: Number,
       default: 0,
       min: [0, 'Salary cannot be negative']
     },
+    salaryCurrency: {
+      type: String,
+      trim: true,
+      default: 'INR'
+    },
+    salaryEffectiveDate: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    paidLeaveAllowance: {
+      type: Number,
+      default: 1,
+      min: [0, 'Paid leave allowance cannot be negative']
+    },
+    salaryHistory: [
+      {
+        amount: { type: Number, required: true },
+        currency: { type: String, default: 'INR' },
+        effectiveDate: { type: String, default: '' },
+        changedBy: { type: String, default: 'HR Admin' },
+        reason: { type: String, default: '' },
+        timestamp: { type: String, default: '' },
+        _id: false
+      }
+    ],
     address: {
       type: String,
       trim: true,

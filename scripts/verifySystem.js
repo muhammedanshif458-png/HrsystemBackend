@@ -360,7 +360,7 @@ const runVerification = async () => {
     console.log('  ✓ HR Dashboard & Reports generated accurately.');
 
     // 20. Test Input Validation Failure
-    console.log('[20/20] Testing input validation (invalid email during login)...');
+    console.log('[20/35] Testing input validation (invalid email during login)...');
     const badLoginRes = await makeRequest(server, 'POST', '/api/auth/login', {}, {
       email: 'not-an-email',
       password: ''
@@ -370,9 +370,262 @@ const runVerification = async () => {
     }
     console.log('  ✓ Validation error returned status 422 with structured field errors.');
 
+    // 21. Test Departments Endpoints
+    console.log('[21/35] Testing GET /api/hr/departments & /api/hr/departments/tech...');
+    const deptsRes = await makeRequest(server, 'GET', '/api/hr/departments', { Authorization: `Bearer ${hrToken}` });
+    if (deptsRes.statusCode !== 200 || !Array.isArray(deptsRes.body.data) || deptsRes.body.data.length < 2) {
+      throw new Error(`Get departments failed: ${JSON.stringify(deptsRes.body)}`);
+    }
+    const singleDeptRes = await makeRequest(server, 'GET', '/api/hr/departments/tech', { Authorization: `Bearer ${hrToken}` });
+    if (singleDeptRes.statusCode !== 200 || singleDeptRes.body.data.deptKey !== 'tech') {
+      throw new Error(`Get single department failed: ${JSON.stringify(singleDeptRes.body)}`);
+    }
+    console.log('  ✓ Department endpoints returned valid organizational units.');
+
+    // 22. Test Employee Status Update
+    console.log('[22/35] Testing PATCH /api/hr/employees/:id/status...');
+    const statusRes = await makeRequest(server, 'PATCH', `/api/hr/employees/${createdEmployee._id}/status`, { Authorization: `Bearer ${hrToken}` }, { status: 'ON_LEAVE' });
+    if (statusRes.statusCode !== 200 || statusRes.body.data.status !== 'ON_LEAVE') {
+      throw new Error(`Update status failed: ${JSON.stringify(statusRes.body)}`);
+    }
+    // Revert to ACTIVE
+    await makeRequest(server, 'PATCH', `/api/hr/employees/${createdEmployee._id}/status`, { Authorization: `Bearer ${hrToken}` }, { status: 'ACTIVE' });
+    console.log('  ✓ Employee status update workflow verified.');
+
+    // 23. Test Salary Management & History Tracking
+    console.log('[23/35] Testing PUT /api/hr/employees/:id/salary...');
+    const salaryRes = await makeRequest(server, 'PUT', `/api/hr/employees/${createdEmployee._id}/salary`, { Authorization: `Bearer ${hrToken}` }, {
+      salary: 95000,
+      reason: 'Annual Performance Appraisal',
+      salaryEffectiveDate: '2026-11-01'
+    });
+    if (salaryRes.statusCode !== 200 || salaryRes.body.data.salary !== 95000 || !salaryRes.body.data.salaryHistory.length) {
+      throw new Error(`Salary update failed: ${JSON.stringify(salaryRes.body)}`);
+    }
+    console.log('  ✓ Salary updated and audit history persisted accurately.');
+
+    // 24. Test Payroll Summary
+    console.log('[24/35] Testing GET /api/hr/payroll/summary...');
+    const payrollSummaryRes = await makeRequest(server, 'GET', '/api/hr/payroll/summary?month=10&year=2026', { Authorization: `Bearer ${hrToken}` });
+    if (payrollSummaryRes.statusCode !== 200 || typeof payrollSummaryRes.body.data.totalNetPayout !== 'number') {
+      throw new Error(`Payroll summary failed: ${JSON.stringify(payrollSummaryRes.body)}`);
+    }
+    console.log('  ✓ Payroll summary calculated with total expenditure and payout.');
+
+    // 25. Test Payroll Employees List
+    console.log('[25/35] Testing GET /api/hr/payroll/employees...');
+    const payrollEmployeesRes = await makeRequest(server, 'GET', '/api/hr/payroll/employees?month=10&year=2026', { Authorization: `Bearer ${hrToken}` });
+    if (payrollEmployeesRes.statusCode !== 200 || !Array.isArray(payrollEmployeesRes.body.data)) {
+      throw new Error(`Payroll employees failed: ${JSON.stringify(payrollEmployeesRes.body)}`);
+    }
+    console.log('  ✓ Payroll employees list computed with daily rate and deductions.');
+
+    // 26. Test Single Employee Payroll
+    console.log('[26/35] Testing GET /api/hr/payroll/employees/:employeeId...');
+    const singlePayrollRes = await makeRequest(server, 'GET', `/api/hr/payroll/employees/${createdEmployee._id}?month=10&year=2026`, { Authorization: `Bearer ${hrToken}` });
+    if (singlePayrollRes.statusCode !== 200 || singlePayrollRes.body.data.grossSalary !== 95000) {
+      throw new Error(`Single employee payroll failed: ${JSON.stringify(singlePayrollRes.body)}`);
+    }
+    console.log('  ✓ Single employee payroll breakdown accurate.');
+
+    // 27. Test HR Task Creation (POST /api/hr/tasks)
+    console.log('[27/35] Testing POST /api/hr/tasks (HR assigns task to Staff)...');
+    const createTaskRes = await makeRequest(server, 'POST', '/api/hr/tasks', { Authorization: `Bearer ${hrToken}` }, {
+      staffId: createdEmployee._id,
+      description: 'Implement complete unit & integration test coverage for portal',
+      dueDate: '2026-10-20',
+      title: 'Portal Testing'
+    });
+    if (createTaskRes.statusCode !== 201 || !createTaskRes.body.data._id) {
+      throw new Error(`Create task failed: ${JSON.stringify(createTaskRes.body)}`);
+    }
+    const createdTask = createTaskRes.body.data;
+    console.log(`  ✓ Task assigned successfully with ID: ${createdTask._id}`);
+
+    // 28. Test HR List Tasks
+    console.log('[28/35] Testing GET /api/hr/tasks...');
+    const hrTasksRes = await makeRequest(server, 'GET', '/api/hr/tasks', { Authorization: `Bearer ${hrToken}` });
+    if (hrTasksRes.statusCode !== 200 || !Array.isArray(hrTasksRes.body.data) || hrTasksRes.body.data.length === 0) {
+      throw new Error(`HR get tasks failed: ${JSON.stringify(hrTasksRes.body)}`);
+    }
+    console.log('  ✓ HR tasks retrieved with pagination metadata.');
+
+    // 29. Test Staff List Own Tasks
+    console.log('[29/35] Testing GET /api/staff/tasks (Staff sees only own assigned tasks)...');
+    const staffTasksRes = await makeRequest(server, 'GET', '/api/staff/tasks', { Authorization: `Bearer ${staffToken}` });
+    if (staffTasksRes.statusCode !== 200 || !Array.isArray(staffTasksRes.body.data) || staffTasksRes.body.data.length === 0) {
+      throw new Error(`Staff tasks failed: ${JSON.stringify(staffTasksRes.body)}`);
+    }
+    console.log('  ✓ Staff successfully retrieved assigned tasks.');
+
+    // 30. Test Staff Update Task Status (PATCH /api/staff/tasks/:id/status)
+    console.log('[30/35] Testing PATCH /api/staff/tasks/:id/status (Staff updates status to in-progress)...');
+    const updateTaskStatusRes = await makeRequest(server, 'PATCH', `/api/staff/tasks/${createdTask._id}/status`, { Authorization: `Bearer ${staffToken}` }, {
+      status: 'in-progress'
+    });
+    if (updateTaskStatusRes.statusCode !== 200 || updateTaskStatusRes.body.data.status !== 'in-progress') {
+      throw new Error(`Staff update task status failed: ${JSON.stringify(updateTaskStatusRes.body)}`);
+    }
+    console.log('  ✓ Staff updated task status.');
+
+    // 31. Test Department Chat: HR sends message
+    console.log('[31/35] Testing POST /api/hr/departments/tech/messages...');
+    const sendMsgRes = await makeRequest(server, 'POST', '/api/hr/departments/tech/messages', { Authorization: `Bearer ${hrToken}` }, {
+      text: 'Welcome team! Standup is at 10:30 AM.'
+    });
+    if (sendMsgRes.statusCode !== 201 || !sendMsgRes.body.data._id) {
+      throw new Error(`Send chat message failed: ${JSON.stringify(sendMsgRes.body)}`);
+    }
+    const createdMessage = sendMsgRes.body.data;
+    console.log('  ✓ Department chat message sent successfully.');
+
+    // 32. Test Department Chat: Staff reads messages
+    console.log('[32/35] Testing GET /api/staff/departments/tech/messages...');
+    const getStaffMsgsRes = await makeRequest(server, 'GET', '/api/staff/departments/tech/messages', { Authorization: `Bearer ${staffToken}` });
+    if (getStaffMsgsRes.statusCode !== 200 || !Array.isArray(getStaffMsgsRes.body.data) || getStaffMsgsRes.body.data.length === 0) {
+      throw new Error(`Staff get department messages failed: ${JSON.stringify(getStaffMsgsRes.body)}`);
+    }
+    console.log('  ✓ Staff retrieved department chat messages.');
+
+    // 33. Test Department Chat: Delete for Me
+    console.log('[33/35] Testing PATCH /api/staff/departments/tech/messages/:id/delete-for-me...');
+    const deleteForMeRes = await makeRequest(server, 'PATCH', `/api/staff/departments/tech/messages/${createdMessage.id}/delete-for-me`, { Authorization: `Bearer ${staffToken}` }, {});
+    if (deleteForMeRes.statusCode !== 200) {
+      throw new Error(`Delete for me failed: ${JSON.stringify(deleteForMeRes.body)}`);
+    }
+    // Verify it is now hidden for staff
+    const checkHiddenRes = await makeRequest(server, 'GET', '/api/staff/departments/tech/messages', { Authorization: `Bearer ${staffToken}` });
+    const isPresent = checkHiddenRes.body.data.some(m => m.id === createdMessage.id);
+    if (isPresent) {
+      throw new Error('Message should have been hidden after delete-for-me');
+    }
+    console.log('  ✓ Delete-for-me successfully hides message for that user only.');
+
+    // 34. Test Department Chat: Delete for Everyone
+    console.log('[34/35] Testing DELETE /api/hr/departments/tech/messages/:id (Delete for everyone)...');
+    const deleteForEveryoneRes = await makeRequest(server, 'DELETE', `/api/hr/departments/tech/messages/${createdMessage.id}`, { Authorization: `Bearer ${hrToken}` });
+    if (deleteForEveryoneRes.statusCode !== 200) {
+      throw new Error(`Delete for everyone failed: ${JSON.stringify(deleteForEveryoneRes.body)}`);
+    }
+    console.log('  ✓ Message deleted for everyone soft tombstone applied.');
+
+    // 35. Test Company Birthdays Endpoint
+    console.log('[35/38] Testing GET /api/hr/birthdays and /api/staff/birthdays...');
+    const hrBdayRes = await makeRequest(server, 'GET', '/api/hr/birthdays?daysAhead=30', { Authorization: `Bearer ${hrToken}` });
+    if (hrBdayRes.statusCode !== 200 || !Array.isArray(hrBdayRes.body.data.today)) {
+      throw new Error(`HR birthdays failed: ${JSON.stringify(hrBdayRes.body)}`);
+    }
+    const staffBdayRes = await makeRequest(server, 'GET', '/api/staff/birthdays?daysAhead=30', { Authorization: `Bearer ${staffToken}` });
+    if (staffBdayRes.statusCode !== 200 || !Array.isArray(staffBdayRes.body.data.today)) {
+      throw new Error(`Staff birthdays failed: ${JSON.stringify(staffBdayRes.body)}`);
+    }
+    console.log('  ✓ Company birthdays endpoint functional for both HR and Staff.');
+
+    // 36. Test CORS Preflight OPTIONS for /api/auth/login from Frontend Origin
+    console.log('[36/38] Testing CORS preflight OPTIONS /api/auth/login with Origin: http://localhost:51834...');
+    const preflightRes = await makeRequest(server, 'OPTIONS', '/api/auth/login', {
+      'Origin': 'http://localhost:51834',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type'
+    });
+    if (preflightRes.statusCode !== 204) {
+      throw new Error(`Expected 204 for CORS preflight, got ${preflightRes.statusCode}`);
+    }
+    if (preflightRes.headers['access-control-allow-origin'] !== 'http://localhost:51834') {
+      throw new Error(`Expected Access-Control-Allow-Origin: http://localhost:51834, got ${preflightRes.headers['access-control-allow-origin']}`);
+    }
+    if (preflightRes.headers['access-control-allow-credentials'] !== 'true') {
+      throw new Error('Expected Access-Control-Allow-Credentials: true');
+    }
+    console.log('  ✓ CORS preflight OPTIONS returned 204 with required headers for http://localhost:51834.');
+
+    // 37. Test CORS Protection: Untrusted Origin Rejected
+    console.log('[37/38] Testing CORS security: rejecting unauthorized third-party origin...');
+    const untrustedPreflightRes = await makeRequest(server, 'OPTIONS', '/api/auth/login', {
+      'Origin': 'https://untrusted-external-domain.com',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type'
+    });
+    if (untrustedPreflightRes.headers['access-control-allow-origin']) {
+      throw new Error(`Unauthorized origin should not receive Access-Control-Allow-Origin, got ${untrustedPreflightRes.headers['access-control-allow-origin']}`);
+    }
+    console.log('  ✓ Untrusted origin properly denied Access-Control-Allow-Origin header.');
+
+    // 38. Test POST /api/auth/login from Frontend Origin includes CORS header
+    console.log('[38/42] Testing POST /api/auth/login from Origin: http://localhost:51834...');
+    const corsLoginRes = await makeRequest(server, 'POST', '/api/auth/login', {
+      'Origin': 'http://localhost:51834'
+    }, {
+      email: 'admin@hrmanagement.com',
+      password: 'Admin@12345'
+    });
+    if (corsLoginRes.statusCode !== 200 || corsLoginRes.headers['access-control-allow-origin'] !== 'http://localhost:51834') {
+      throw new Error(`Login from origin failed or missing CORS header: status ${corsLoginRes.statusCode}, origin ${corsLoginRes.headers['access-control-allow-origin']}`);
+    }
+    console.log('  ✓ Login with Origin http://localhost:51834 successfully authenticated with CORS header.');
+
+    // 39. Seed Super Admin Account in test database
+    console.log('[39/42] Seeding dedicated Super Admin account (lysoftware@gmail.com)...');
+    const superAdminUser = new User({
+      firstName: 'Super',
+      lastName: 'Admin',
+      email: 'lysoftware@gmail.com',
+      phone: '+1234567899',
+      password: 'hrAdmin',
+      role: 'SUPER_ADMIN',
+      isActive: true
+    });
+    await superAdminUser.save();
+    console.log('  ✓ Super Admin account created with role SUPER_ADMIN.');
+
+    // 40. Test Super Admin Login
+    console.log('[40/42] Testing POST /api/auth/login for Super Admin (lysoftware@gmail.com)...');
+    const superAdminLoginRes = await makeRequest(server, 'POST', '/api/auth/login', {}, {
+      email: 'lysoftware@gmail.com',
+      password: 'hrAdmin'
+    });
+    if (superAdminLoginRes.statusCode !== 200) {
+      throw new Error(`Super Admin login failed with status ${superAdminLoginRes.statusCode}`);
+    }
+    if (superAdminLoginRes.body?.data?.user?.role !== 'SUPER_ADMIN') {
+      throw new Error(`Expected role SUPER_ADMIN, got ${superAdminLoginRes.body?.data?.user?.role}`);
+    }
+    const superAdminToken = superAdminLoginRes.body?.data?.accessToken;
+    if (!superAdminToken) {
+      throw new Error('Super Admin login response missing accessToken');
+    }
+    console.log('  ✓ Super Admin login successful, returned role SUPER_ADMIN.');
+
+    // 41. Test Super Admin RBAC access to HR endpoints
+    console.log('[41/42] Testing Super Admin accessing HR administrative routes (/api/hr/dashboard, /api/hr/employees)...');
+    const saDashRes = await makeRequest(server, 'GET', '/api/hr/dashboard', {
+      'Authorization': `Bearer ${superAdminToken}`
+    });
+    if (saDashRes.statusCode !== 200) {
+      throw new Error(`Super Admin denied access to /api/hr/dashboard: status ${saDashRes.statusCode}`);
+    }
+    const saEmpRes = await makeRequest(server, 'GET', '/api/hr/employees', {
+      'Authorization': `Bearer ${superAdminToken}`
+    });
+    if (saEmpRes.statusCode !== 200) {
+      throw new Error(`Super Admin denied access to /api/hr/employees: status ${saEmpRes.statusCode}`);
+    }
+    console.log('  ✓ Super Admin granted full access to HR administrative routes.');
+
+    // 42. Test Super Admin role isolation on Staff Portal (/api/staff/dashboard)
+    console.log('[42/42] Testing Super Admin role isolation on Staff Portal (/api/staff/dashboard)...');
+    const saStaffRes = await makeRequest(server, 'GET', '/api/staff/dashboard', {
+      'Authorization': `Bearer ${superAdminToken}`
+    });
+    if (saStaffRes.statusCode !== 403) {
+      throw new Error(`Expected 403 Forbidden for Super Admin on /api/staff/dashboard, got ${saStaffRes.statusCode}`);
+    }
+    console.log('  ✓ Super Admin properly rejected on Staff self-service route with 403 Forbidden.');
+
     console.log('\n========================================');
-    console.log('  ALL 20 SYSTEM VERIFICATIONS PASSED!  ');
+    console.log('  ALL 42 SYSTEM VERIFICATIONS PASSED!  ');
     console.log('========================================\n');
+
   } catch (error) {
     console.error('\n❌ Verification Failed:', error.message);
     if (error.stack) console.error(error.stack);

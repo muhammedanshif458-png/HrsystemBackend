@@ -1,20 +1,33 @@
 const express = require('express');
 const router = express.Router();
 const hrController = require('../controllers/hrController');
+const documentController = require('../controllers/documentController');
+const payrollController = require('../controllers/payrollController');
+const taskController = require('../controllers/taskController');
+const chatController = require('../controllers/chatController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
+const { documentUpload } = require('../middleware/documentUploadMiddleware');
 const {
   createEmployeeValidator,
   updateEmployeeValidator,
   rejectLeaveValidator,
-  mongoIdParamValidator
+  mongoIdParamValidator,
+  birthdaysValidator
 } = require('../validators/hrValidator');
 
-// Protect all HR routes with JWT authentication and HR role
-router.use(authMiddleware, roleMiddleware('HR'));
+// Protect all HR routes with JWT authentication and HR/SUPER_ADMIN roles
+router.use(authMiddleware, roleMiddleware('HR', 'SUPER_ADMIN'));
 
 // Dashboard
 router.get('/dashboard', hrController.getDashboard);
+
+// Departments
+router.get('/departments', hrController.getDepartments);
+router.get('/departments/:deptKey', hrController.getDepartmentByKey);
+
+// Company-Wide Birthdays (Tech & Telecalling)
+router.get('/birthdays', birthdaysValidator, hrController.getBirthdays);
 
 // Employees CRUD
 router.get('/employees', hrController.getEmployees);
@@ -22,6 +35,18 @@ router.post('/employees', createEmployeeValidator, hrController.createEmployee);
 router.get('/employees/:id', hrController.getEmployeeById);
 router.put('/employees/:id', updateEmployeeValidator, hrController.updateEmployee);
 router.delete('/employees/:id', hrController.deleteEmployee);
+router.patch('/employees/:id/status', hrController.updateStatus);
+
+// Salary management with history tracking
+router.put('/employees/:id/salary', mongoIdParamValidator, hrController.updateSalary);
+
+// HR Document Management endpoints
+router.post('/employees/:id/documents', documentUpload.single('file'), documentController.uploadDocument);
+router.get('/employees/:id/documents', documentController.getEmployeeDocuments);
+router.get('/documents/:docId', documentController.getDocumentById);
+router.put('/documents/:docId', documentUpload.single('file'), documentController.replaceDocument);
+router.patch('/documents/:docId/archive', documentController.archiveDocument);
+router.get('/documents/:docId/download', documentController.downloadDocument);
 
 // Attendance
 router.get('/attendance', hrController.getAttendance);
@@ -37,4 +62,23 @@ router.put('/leaves/:id/reject', rejectLeaveValidator, hrController.rejectLeave)
 router.get('/reports/attendance', hrController.getAttendanceReports);
 router.get('/reports/leaves', hrController.getLeaveReports);
 
+// Payroll Endpoints
+router.get('/payroll/summary', payrollController.getSummary);
+router.get('/payroll/employees', payrollController.getEmployeesPayroll);
+router.get('/payroll/employees/:employeeId', payrollController.getEmployeePayrollById);
+
+// Task Management Endpoints
+router.get('/tasks', taskController.getTasks);
+router.post('/tasks', taskController.createTask);
+router.get('/tasks/:id', taskController.getTaskById);
+router.put('/tasks/:id', taskController.updateTask);
+router.delete('/tasks/:id', taskController.deleteTask);
+
+// Department Chat & Messaging Endpoints
+router.get('/departments/:deptKey/messages', chatController.getDepartmentMessages);
+router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessage);
+router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
+router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
+
 module.exports = router;
+

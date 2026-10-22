@@ -13,7 +13,10 @@ const roleMiddleware = (...allowedRoles) => {
     // Flatten in case an array is passed
     const roles = allowedRoles.flat();
 
-    if (!roles.includes(req.user.role)) {
+    // SUPER_ADMIN has full administrative authority wherever HR access is permitted
+    const hasAccess = roles.includes(req.user.role) || (roles.includes('HR') && req.user.role === 'SUPER_ADMIN');
+
+    if (!hasAccess) {
       return sendError(
         res,
         `Forbidden: Access restricted to [${roles.join(', ')}] role(s). Your role: ${req.user.role}`,

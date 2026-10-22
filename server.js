@@ -25,13 +25,45 @@ const app = express();
 app.use(helmet());
 
 // 5. Enable CORS
+const defaultAllowedOrigins = [
+  'http://localhost:50250',
+  'http://127.0.0.1:50250',
+  'http://localhost:51834',
+  'http://127.0.0.1:51834',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+];
+
+const configuredOrigins = (env.clientUrl && env.clientUrl !== '*')
+  ? env.clientUrl.split(',').map((url) => url.trim()).filter(Boolean)
+  : [];
+
+const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...configuredOrigins]));
+
 const corsOptions = {
-  origin: env.clientUrl === '*' ? '*' : [env.clientUrl, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: (origin, callback) => {
+    // Allow non-browser requests with no origin (e.g. curl, Postman, server-to-server)
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    // In development mode, also allow any local port on localhost or 127.0.0.1
+    if (!env.isProduction && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Content-Disposition'],
+  optionsSuccessStatus: 204
 };
+
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // 6. Enable JSON body parsing
 app.use(express.json({ limit: '10mb' }));

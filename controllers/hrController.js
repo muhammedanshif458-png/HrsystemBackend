@@ -34,7 +34,7 @@ class HRController {
    */
   async createEmployee(req, res, next) {
     try {
-      const employee = await hrService.createEmployee(req.body);
+      const employee = await hrService.createEmployee(req.body, req.user);
       return sendSuccess(res, 'Employee created successfully', employee, 201);
     } catch (err) {
       next(err);
@@ -58,8 +58,24 @@ class HRController {
    */
   async updateEmployee(req, res, next) {
     try {
-      const updated = await hrService.updateEmployee(req.params.id, req.body);
+      const updated = await hrService.updateEmployee(req.params.id, req.body, req.user);
       return sendSuccess(res, 'Employee updated successfully', updated);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * PUT /api/hr/employees/:id/salary
+   * Update employee salary with history tracking
+   */
+  async updateSalary(req, res, next) {
+    try {
+      const employee = await hrService.updateSalary(req.params.id, {
+        ...req.body,
+        changedBy: req.user ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'HR Admin' : 'HR Admin'
+      });
+      return sendSuccess(res, 'Salary updated successfully', employee);
     } catch (err) {
       next(err);
     }
@@ -172,6 +188,56 @@ class HRController {
       next(err);
     }
   }
+
+  /**
+   * PATCH /api/hr/employees/:id/status
+   */
+  async updateStatus(req, res, next) {
+    try {
+      const employee = await hrService.updateEmployeeStatus(req.params.id, req.body.status);
+      return sendSuccess(res, 'Employee status updated successfully', employee);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/departments
+   */
+  async getDepartments(req, res, next) {
+    try {
+      const departments = await hrService.getDepartments();
+      return sendSuccess(res, 'Departments retrieved successfully', departments);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/departments/:deptKey
+   */
+  async getDepartmentByKey(req, res, next) {
+    try {
+      const dept = await hrService.getDepartmentByKey(req.params.deptKey);
+      return sendSuccess(res, 'Department retrieved successfully', dept);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/birthdays
+   */
+  async getBirthdays(req, res, next) {
+    try {
+      const daysAhead = req.query.daysAhead !== undefined ? parseInt(req.query.daysAhead, 10) : 30;
+      const birthdays = await hrService.getCompanyBirthdays(daysAhead);
+      return sendSuccess(res, 'Company birthdays fetched successfully', birthdays);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new HRController();
+

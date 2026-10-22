@@ -1,14 +1,27 @@
+const mongoose = require('mongoose');
 const { body, param, query } = require('express-validator');
 const { validate } = require('./authValidator');
 
 const createEmployeeValidator = [
+  body('name')
+    .optional()
+    .trim(),
+  body('fullName')
+    .optional()
+    .trim(),
   body('firstName')
+    .optional()
     .trim()
-    .notEmpty().withMessage('First name is required')
-    .isLength({ max: 50 }).withMessage('First name must be under 50 characters'),
+    .isLength({ max: 50 }).withMessage('First name must be under 50 characters')
+    .custom((val, { req }) => {
+      if (!val && !req.body.name && !req.body.fullName) {
+        throw new Error('First name is required');
+      }
+      return true;
+    }),
   body('lastName')
+    .optional()
     .trim()
-    .notEmpty().withMessage('Last name is required')
     .isLength({ max: 50 }).withMessage('Last name must be under 50 characters'),
   body('email')
     .trim()
@@ -25,12 +38,19 @@ const createEmployeeValidator = [
   body('phone')
     .optional()
     .trim(),
+  body('phoneNumber')
+    .optional()
+    .trim(),
   body('department')
     .trim()
     .notEmpty().withMessage('Department is required'),
   body('designation')
     .trim()
     .notEmpty().withMessage('Designation is required'),
+  body('workMode')
+    .optional()
+    .trim()
+    .isLength({ max: 50 }).withMessage('Work mode must be under 50 characters'),
   body('employmentType')
     .optional()
     .isIn(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'])
@@ -46,25 +66,64 @@ const createEmployeeValidator = [
     .optional()
     .isIn(['MALE', 'FEMALE', 'OTHER'])
     .withMessage('Gender must be MALE, FEMALE, or OTHER'),
+  body('dateOfBirth')
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === '' || value === undefined) return true;
+      if (typeof value === 'boolean') throw new Error('Date of birth must be a valid date');
+      const d = new Date(value);
+      if (isNaN(d.getTime())) {
+        throw new Error('Date of birth must be a valid date');
+      }
+      if (d > new Date()) {
+        throw new Error('Date of birth cannot be in the future');
+      }
+      return true;
+    }),
   validate
 ];
 
 const updateEmployeeValidator = [
   param('id')
-    .isMongoId().withMessage('Invalid employee ID format'),
+    .custom((val) => {
+      if (mongoose.Types.ObjectId.isValid(val) || /^[A-Za-z0-9_-]+$/.test(val)) {
+        return true;
+      }
+      throw new Error('Invalid employee ID format');
+    }),
+  body('password')
+    .optional({ nullable: true })
+    .custom((val) => {
+      if (val === null || val === undefined || val === '') return true;
+      if (typeof val !== 'string' || val.trim().length < 6) {
+        throw new Error('Password must be at least 6 characters long');
+      }
+      return true;
+    }),
+  body('name')
+    .optional()
+    .trim(),
+  body('fullName')
+    .optional()
+    .trim(),
   body('firstName')
     .optional()
     .trim()
     .notEmpty().withMessage('First name cannot be empty'),
   body('lastName')
     .optional()
-    .trim()
-    .notEmpty().withMessage('Last name cannot be empty'),
+    .trim(),
   body('email')
     .optional()
     .trim()
     .isEmail().withMessage('Please provide a valid email')
     .normalizeEmail(),
+  body('phone')
+    .optional()
+    .trim(),
+  body('phoneNumber')
+    .optional()
+    .trim(),
   body('department')
     .optional()
     .trim()
@@ -73,6 +132,10 @@ const updateEmployeeValidator = [
     .optional()
     .trim()
     .notEmpty().withMessage('Designation cannot be empty'),
+  body('workMode')
+    .optional()
+    .trim()
+    .isLength({ max: 50 }).withMessage('Work mode must be under 50 characters'),
   body('employmentType')
     .optional()
     .isIn(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'])
@@ -84,6 +147,20 @@ const updateEmployeeValidator = [
     .optional()
     .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'])
     .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, or TERMINATED'),
+  body('dateOfBirth')
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === '' || value === undefined) return true;
+      if (typeof value === 'boolean') throw new Error('Date of birth must be a valid date');
+      const d = new Date(value);
+      if (isNaN(d.getTime())) {
+        throw new Error('Date of birth must be a valid date');
+      }
+      if (d > new Date()) {
+        throw new Error('Date of birth cannot be in the future');
+      }
+      return true;
+    }),
   validate
 ];
 
@@ -103,7 +180,16 @@ const mongoIdParamValidator = [
   validate
 ];
 
+const birthdaysValidator = [
+  query('daysAhead')
+    .optional()
+    .isInt({ min: 0, max: 365 })
+    .withMessage('daysAhead must be a non-negative integer between 0 and 365'),
+  validate
+];
+
 module.exports = {
+  birthdaysValidator,
   createEmployeeValidator,
   updateEmployeeValidator,
   rejectLeaveValidator,

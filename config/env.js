@@ -17,11 +17,16 @@ const env = {
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d'
   },
   
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
+  clientUrl: process.env.CLIENT_URL || 'http://localhost:51834,http://localhost:3000',
   
   seedAdmin: {
     email: process.env.SEED_ADMIN_EMAIL || 'admin@hrmanagement.com',
     password: process.env.SEED_ADMIN_PASSWORD || 'Admin@12345'
+  },
+
+  seedSuperAdmin: {
+    email: (process.env.SEED_SUPER_ADMIN_EMAIL || 'lysoftware@gmail.com').toLowerCase(),
+    password: process.env.SEED_SUPER_ADMIN_PASSWORD || 'hrAdmin'
   }
 };
 
