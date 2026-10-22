@@ -613,7 +613,7 @@ const runVerification = async () => {
     console.log('  ✓ Super Admin granted full access to HR administrative routes.');
 
     // 42. Test Super Admin role isolation on Staff Portal (/api/staff/dashboard)
-    console.log('[42/42] Testing Super Admin role isolation on Staff Portal (/api/staff/dashboard)...');
+    console.log('[42/46] Testing Super Admin role isolation on Staff Portal (/api/staff/dashboard)...');
     const saStaffRes = await makeRequest(server, 'GET', '/api/staff/dashboard', {
       'Authorization': `Bearer ${superAdminToken}`
     });
@@ -622,9 +622,66 @@ const runVerification = async () => {
     }
     console.log('  ✓ Super Admin properly rejected on Staff self-service route with 403 Forbidden.');
 
+    // 43. Test Staff Submitting Daily Work Update
+    console.log('[43/46] Testing Staff submitting daily work update (POST /api/staff/daily-updates)...');
+    const staffDailyUpdateRes = await makeRequest(server, 'POST', '/api/staff/daily-updates', {
+      'Authorization': `Bearer ${staffToken}`
+    }, {
+      updateText: 'Completed database indexing, backend unit tests and API integration',
+      date: '2026-10-22',
+      tasksCompleted: ['Wrote regression tests', 'Added RBAC guards'],
+      hoursWorked: 8
+    });
+    if (staffDailyUpdateRes.statusCode !== 201) {
+      throw new Error(`Staff daily update submission failed: status ${staffDailyUpdateRes.statusCode} - ${JSON.stringify(staffDailyUpdateRes.body)}`);
+    }
+    const submittedUpdate = staffDailyUpdateRes.body?.data;
+    if (!submittedUpdate?.id || submittedUpdate?.updateText !== 'Completed database indexing, backend unit tests and API integration') {
+      throw new Error('Staff daily update returned unexpected payload');
+    }
+    if (submittedUpdate?.employeeId !== 'EMP1001') {
+      throw new Error(`Expected employeeId EMP1001, got ${submittedUpdate?.employeeId}`);
+    }
+    console.log('  ✓ Staff daily work update submitted and persisted with verified employee identity.');
+
+    // 44. Test Staff Retrieving Own Daily Updates
+    console.log('[44/46] Testing Staff retrieving own daily updates (GET /api/staff/daily-updates)...');
+    const staffGetUpdatesRes = await makeRequest(server, 'GET', '/api/staff/daily-updates', {
+      'Authorization': `Bearer ${staffToken}`
+    });
+    if (staffGetUpdatesRes.statusCode !== 200 || staffGetUpdatesRes.body?.data?.length < 1) {
+      throw new Error(`Failed to retrieve staff updates: status ${staffGetUpdatesRes.statusCode}`);
+    }
+    console.log('  ✓ Staff successfully retrieved personal daily updates list.');
+
+    // 45. Test HR Retrieving Company-Wide Daily Updates
+    console.log('[45/46] Testing HR retrieving daily updates with department and employee filtering (GET /api/hr/daily-updates)...');
+    const hrDailyUpdatesRes = await makeRequest(server, 'GET', '/api/hr/daily-updates?department=Engineering', {
+      'Authorization': `Bearer ${hrToken}`
+    });
+    if (hrDailyUpdatesRes.statusCode !== 200 || hrDailyUpdatesRes.body?.data?.length < 1) {
+      throw new Error(`HR failed to retrieve daily updates: status ${hrDailyUpdatesRes.statusCode}`);
+    }
+    const hrSample = hrDailyUpdatesRes.body.data[0];
+    if (!hrSample.staffId || !hrSample.employeeId || !hrSample.date || !hrSample.updateText) {
+      throw new Error('HR daily updates response missing required contract fields for Flutter frontend');
+    }
+    console.log('  ✓ HR retrieved company-wide daily updates matching Flutter contract.');
+
+    // 46. Test Super Admin Employee-Specific Retrieval
+    console.log('[46/46] Testing Super Admin employee-specific updates retrieval (GET /api/hr/employees/:id/daily-updates)...');
+    const saEmpUpdatesRes = await makeRequest(server, 'GET', `/api/hr/employees/${createdEmployee._id}/daily-updates`, {
+      'Authorization': `Bearer ${superAdminToken}`
+    });
+    if (saEmpUpdatesRes.statusCode !== 200 || saEmpUpdatesRes.body?.data?.length < 1) {
+      throw new Error(`Super Admin failed to retrieve employee daily updates: status ${saEmpUpdatesRes.statusCode}`);
+    }
+    console.log('  ✓ Super Admin verified employee-specific daily work updates endpoint.');
+
     console.log('\n========================================');
-    console.log('  ALL 42 SYSTEM VERIFICATIONS PASSED!  ');
+    console.log('  ALL 46 SYSTEM VERIFICATIONS PASSED!  ');
     console.log('========================================\n');
+
 
   } catch (error) {
     console.error('\n❌ Verification Failed:', error.message);

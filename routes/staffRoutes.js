@@ -4,6 +4,7 @@ const staffController = require('../controllers/staffController');
 const documentController = require('../controllers/documentController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
+const dailyUpdateController = require('../controllers/dailyUpdateController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
 const { leaveAttachmentUpload } = require('../middleware/documentUploadMiddleware');
@@ -12,11 +13,14 @@ const {
   checkInValidator,
   checkOutValidator,
   applyLeaveValidator,
-  leaveIdParamValidator
+  leaveIdParamValidator,
+  dailyUpdateValidator,
+  dailyUpdateIdParamValidator
 } = require('../validators/staffValidator');
 
 // Protect all Staff routes with JWT authentication and STAFF role
 router.use(authMiddleware, roleMiddleware('STAFF'));
+
 
 // Dashboard
 router.get('/dashboard', staffController.getDashboard);
@@ -50,6 +54,11 @@ router.get('/tasks', taskController.getStaffTasks);
 router.get('/tasks/:id', taskController.getTaskById);
 router.patch('/tasks/:id/status', taskController.updateStaffTaskStatus);
 
+// Daily Work Updates (Staff submits and views own daily updates)
+router.post('/daily-updates', dailyUpdateValidator, dailyUpdateController.submitDailyUpdate);
+router.get('/daily-updates', dailyUpdateController.getStaffDailyUpdates);
+router.get('/daily-updates/:id', dailyUpdateIdParamValidator, dailyUpdateController.getStaffDailyUpdateById);
+
 // Department Chat & Messaging
 router.get('/departments/:deptKey/messages', chatController.getDepartmentMessages);
 router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessage);
@@ -57,3 +66,4 @@ router.delete('/departments/:deptKey/messages/:messageId', chatController.delete
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 
 module.exports = router;
+

@@ -10,8 +10,10 @@
     "seed:superadmin": "node scripts/seedSuperAdmin.js",
     "test": "node scripts/verifySystem.js",
     "test:birthdays": "node scripts/verifyBirthdays.js",
-    "test:staff-update": "node scripts/verifyStaffUpdateLive.js"
+    "test:staff-update": "node scripts/verifyStaffUpdateLive.js",
+    "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js"
   },
+
   "keywords": [
     "hr",
     "management",

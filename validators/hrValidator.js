@@ -188,10 +188,38 @@ const birthdaysValidator = [
   validate
 ];
 
+const hrDailyUpdatesQueryValidator = [
+  query('page')
+    .optional()
+    .isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('date')
+    .optional()
+    .trim()
+    .custom((val) => {
+      if (!val) return true;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(val) && isNaN(new Date(val).getTime())) {
+        throw new Error('Date must be in YYYY-MM-DD format');
+      }
+      return true;
+    }),
+  query('startDate')
+    .optional()
+    .trim(),
+  query('endDate')
+    .optional()
+    .trim(),
+  validate
+];
+
 module.exports = {
   birthdaysValidator,
   createEmployeeValidator,
   updateEmployeeValidator,
   rejectLeaveValidator,
-  mongoIdParamValidator
+  mongoIdParamValidator,
+  hrDailyUpdatesQueryValidator
 };
+

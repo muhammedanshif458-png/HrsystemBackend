@@ -5,6 +5,7 @@ const documentController = require('../controllers/documentController');
 const payrollController = require('../controllers/payrollController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
+const dailyUpdateController = require('../controllers/dailyUpdateController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
 const { documentUpload } = require('../middleware/documentUploadMiddleware');
@@ -13,8 +14,10 @@ const {
   updateEmployeeValidator,
   rejectLeaveValidator,
   mongoIdParamValidator,
-  birthdaysValidator
+  birthdaysValidator,
+  hrDailyUpdatesQueryValidator
 } = require('../validators/hrValidator');
+
 
 // Protect all HR routes with JWT authentication and HR/SUPER_ADMIN roles
 router.use(authMiddleware, roleMiddleware('HR', 'SUPER_ADMIN'));
@@ -80,5 +83,11 @@ router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessa
 router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 
+// Staff Daily Work Updates (Authorized HR/Super Admin retrieval only - HR cannot create updates)
+router.get('/daily-updates', hrDailyUpdatesQueryValidator, dailyUpdateController.getHRDailyUpdates);
+router.get('/daily-updates/:id', mongoIdParamValidator, dailyUpdateController.getHRDailyUpdateById);
+router.get('/employees/:id/daily-updates', dailyUpdateController.getEmployeeDailyUpdates);
+
 module.exports = router;
+
 
