@@ -104,7 +104,7 @@ if (require.main === module) {
   // Connect to database then listen
   connectDB()
     .then(() => {
-      server = app.listen(env.port, () => {
+      server = app.listen(env.port, '0.0.0.0', () => {
         logger.info(`HR Management Server is running in [${env.nodeEnv}] mode on port ${env.port}`);
         logger.info(`Health check available at http://localhost:${env.port}/api/health`);
       });

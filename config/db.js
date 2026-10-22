@@ -2,12 +2,25 @@ const mongoose = require('mongoose');
 const env = require('./env');
 const logger = require('../utils/logger');
 
+// Connection event listeners for Atlas lifecycle events
+mongoose.connection.on('disconnected', () => {
+  logger.warn('MongoDB connection lost. Reconnecting...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  logger.info('MongoDB reconnected successfully.');
+});
+
+mongoose.connection.on('error', (err) => {
+  logger.error(`MongoDB runtime error: ${err.message}`, err);
+});
+
 const connectDB = async (customUri = null) => {
-  const uri = customUri || env.mongodbUri;
+  const uri = customUri || process.env.MONGODB_URI || env.mongodbUri;
   
   try {
     const conn = await mongoose.connect(uri);
-    logger.info(`MongoDB Connected successfully to: ${conn.connection.host}/${conn.connection.name}`);
+    logger.info(`MongoDB Connected successfully: Host=${conn.connection.host}, Database=${conn.connection.name}`);
     return conn;
   } catch (error) {
     logger.error(`MongoDB connection error: ${error.message}`, error);
