@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
+const DepartmentSchedule = require('../models/DepartmentSchedule');
+const { isAttendanceForCurrentWorkday } = require('../utils/attendanceSchedule');
 const Leave = require('../models/Leave');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
@@ -11,8 +13,8 @@ const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveRes
  */
 const getDayBounds = (dateStr = null) => {
   const date = dateStr ? new Date(dateStr) : new Date();
-  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+  const startOfDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
   return { startOfDay, endOfDay };
 };
 
@@ -28,6 +30,7 @@ class HRService {
       activeEmployees,
       inactiveEmployees,
       todayAttendanceCounts,
+      lateArrivals,
       pendingLeaves,
       approvedLeaves
     ] = await Promise.all([
@@ -47,6 +50,8 @@ class HRService {
           }
         }
       ]),
+      Attendance.find({ checkIn: { $ne: null }, late: true })
+        .select('date checkIn scheduleTimeZone').lean(),
       Leave.countDocuments({ status: 'PENDING' }),
       Leave.countDocuments({ status: 'APPROVED' })
     ]);
@@ -62,12 +67,15 @@ class HRService {
       }
     });
 
+    const lateRecords = lateArrivals.filter(record => isAttendanceForCurrentWorkday(record));
+
     return {
       totalEmployees,
       activeEmployees,
       inactiveEmployees,
       todayPresent,
       todayAbsent,
+      lateArrivals: lateRecords.length,
       pendingLeaves,
       approvedLeaves
     };
@@ -508,7 +516,7 @@ class HRService {
   /**
    * Get attendance records for HR
    */
-  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status }) {
+  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status, department }) {
     page = Math.max(1, parseInt(page, 10));
     limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
     const skip = (page - 1) * limit;
@@ -530,7 +538,22 @@ class HRService {
       }
     }
 
-    if (status) {
+    if (department) {
+      const employees = await Employee.find({ department: new RegExp(`^${String(department).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }).select('_id').lean();
+      const departmentEmployeeIds = employees.map(e => e._id);
+      if (filter.employee) {
+        if (!departmentEmployeeIds.some(id => id.equals(filter.employee))) {
+          return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+        }
+      } else {
+        filter.employee = { $in: departmentEmployeeIds };
+      }
+    }
+
+    if (status === 'LATE') {
+      filter.late = true;
+      filter.checkIn = { $ne: null };
+    } else if (status) {
       filter.status = status;
     }
 
@@ -544,15 +567,30 @@ class HRService {
       }
     }
 
-    const [attendance, total] = await Promise.all([
-      Attendance.find(filter)
+    let attendance;
+    let total;
+    if (status === 'LATE') {
+      const lateFilter = { ...filter };
+      delete lateFilter.late;
+      delete lateFilter.checkIn;
+      const lateRows = await Attendance.find({ ...lateFilter, late: true, checkIn: { $ne: null } })
         .populate('employee', 'employeeId firstName lastName department designation')
         .sort({ date: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Attendance.countDocuments(filter)
-    ]);
+        .lean();
+      const currentWorkdayRows = lateRows.filter(row => isAttendanceForCurrentWorkday(row));
+      total = currentWorkdayRows.length;
+      attendance = currentWorkdayRows.slice(skip, skip + limit);
+    } else {
+      [attendance, total] = await Promise.all([
+        Attendance.find(filter)
+          .populate('employee', 'employeeId firstName lastName department designation')
+          .sort({ date: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Attendance.countDocuments(filter)
+      ]);
+    }
 
     const totalPages = Math.ceil(total / limit) || 1;
 
@@ -565,7 +603,7 @@ class HRService {
   /**
    * Get attendance for a specific employee
    */
-  async getAttendanceByEmployeeId(empIdentifier, { page = 1, limit = 20, startDate, endDate }) {
+  async getAttendanceByEmployeeId(empIdentifier, { page = 1, limit = 20, startDate, endDate, status }) {
     let emp;
     if (mongoose.Types.ObjectId.isValid(empIdentifier)) {
       emp = await Employee.findOne({ $or: [{ _id: empIdentifier }, { employeeId: empIdentifier.toUpperCase() }] });
@@ -577,7 +615,7 @@ class HRService {
       throw new AppError('Employee not found', 404);
     }
 
-    return this.getAttendance({ page, limit, employeeId: emp._id.toString(), startDate, endDate });
+    return this.getAttendance({ page, limit, employeeId: emp._id.toString(), startDate, endDate, status });
   }
 
   /**
@@ -994,6 +1032,8 @@ class HRService {
     const techStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tech') || (e.department || '').toLowerCase().includes('engineering'));
     const teleStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tele') || (e.department || '').toLowerCase().includes('client'));
 
+    const schedules = await DepartmentSchedule.find().lean();
+    const scheduleFor = (departmentNames) => schedules.find(s => departmentNames.some(n => n.toLowerCase() === s.department.toLowerCase())) || null;
     return [
       {
         deptKey: 'tech',
@@ -1003,7 +1043,8 @@ class HRService {
         activeCount: techStaff.filter(s => s.status === 'ACTIVE').length,
         leadName: 'Anita Rao (Lead HR / Tech Ops)',
         icon: 'computer',
-        color: '#2563EB'
+        color: '#2563EB',
+        schedule: scheduleFor([...new Set(techStaff.map(e => e.department))])
       },
       {
         deptKey: 'telecalling',
@@ -1013,7 +1054,8 @@ class HRService {
         activeCount: teleStaff.filter(s => s.status === 'ACTIVE').length,
         leadName: 'Neha Sharma (Operations Senior)',
         icon: 'headset_mic',
-        color: '#DB2777'
+        color: '#DB2777',
+        schedule: scheduleFor([...new Set(teleStaff.map(e => e.department))])
       }
     ];
   }
@@ -1029,6 +1071,39 @@ class HRService {
       throw new AppError(`Department '${deptKey}' not found`, 404);
     }
     return dept;
+  }
+
+  async setDepartmentSchedule(department, { checkInTime, timeZone, gracePeriodMinutes = 0 } = {}) {
+    const name = String(department || '').trim();
+    if (!name || name.length > 100) throw new AppError('A valid department key is required', 400);
+    if (typeof checkInTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkInTime)) {
+      throw new AppError('Check-in time must use 24-hour HH:mm format', 400);
+    }
+    if (typeof timeZone !== 'string' || !timeZone.trim()) throw new AppError('IANA time zone is required', 400);
+    if (!Number.isSafeInteger(gracePeriodMinutes) || gracePeriodMinutes < 0) {
+      throw new AppError('Grace period must be a non-negative integer', 400);
+    }
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+    } catch (_) {
+      throw new AppError('Invalid time zone', 400);
+    }
+    const exists = await Employee.exists({ department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    if (!exists) throw new AppError('Department not found', 404);
+    return DepartmentSchedule.findOneAndUpdate(
+      { department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      { $set: { department: name, checkInTime, timeZone, gracePeriodMinutes } },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  async getDepartmentSchedule(department) {
+    const name = String(department || '').trim();
+    if (!name || name.length > 100) throw new AppError('A valid department key is required', 400);
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const employeeExists = await Employee.exists({ department: new RegExp(`^${escaped}$`, 'i') });
+    if (!employeeExists) throw new AppError('Department not found', 404);
+    return DepartmentSchedule.findOne({ department: new RegExp(`^${escaped}$`, 'i') }).lean();
   }
 }
 

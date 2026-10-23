@@ -23,6 +23,12 @@ const dailyUpdateSchema = new mongoose.Schema(
       trim: true,
       default: () => new Date().toISOString().split('T')[0]
     },
+    title: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Title cannot exceed 200 characters'],
+      default: ''
+    },
     updateText: {
       type: String,
       required: [true, 'Update text is required'],

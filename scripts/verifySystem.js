@@ -1,7 +1,11 @@
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = 'dedicated-system-test-secret-at-least-32-characters';
+process.env.JWT_REFRESH_SECRET = 'dedicated-system-refresh-test-secret-at-least-32';
+
 const mongoose = require('mongoose');
 const http = require('http');
-const { MongoMemoryServer } = require('mongodb-memory-server');
 const { app } = require('../server');
+const { connectTestDatabase } = require('./testDatabase');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
@@ -71,18 +75,8 @@ const runVerification = async () => {
   try {
     // 1. Connect DB (try in-memory if local mongodb is not running)
     console.log('[1/20] Setting up MongoDB database...');
-    let mongoUri;
-    try {
-      mongod = await MongoMemoryServer.create();
-      mongoUri = mongod.getUri();
-      console.log('  -> Using MongoMemoryServer for safe, isolated test run');
-    } catch (e) {
-      console.log('  -> MongoMemoryServer setup failed, falling back to local MongoDB', e.message);
-      mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/hr_management_test';
-    }
-
-    await mongoose.connect(mongoUri);
-    console.log('  ✓ Connected to MongoDB successfully.');
+    ({ mongod } = await connectTestDatabase());
+    console.log(`  ✓ Connected to isolated database ${mongoose.connection.name}.`);
 
     // 2. Start HTTP server
     console.log('[2/20] Starting test HTTP server...');

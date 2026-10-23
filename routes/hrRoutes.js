@@ -28,6 +28,8 @@ router.get('/dashboard', hrController.getDashboard);
 // Departments
 router.get('/departments', hrController.getDepartments);
 router.get('/departments/:deptKey', hrController.getDepartmentByKey);
+router.get('/departments/:deptKey/schedule', hrController.getDepartmentSchedule);
+router.put('/departments/:deptKey/schedule', hrController.setDepartmentSchedule);
 
 // Company-Wide Birthdays (Tech & Telecalling)
 router.get('/birthdays', birthdaysValidator, hrController.getBirthdays);

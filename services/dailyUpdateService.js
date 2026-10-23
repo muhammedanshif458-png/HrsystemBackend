@@ -29,6 +29,7 @@ const formatDailyUpdate = (doc) => {
     employeeId: employeeStringId || empId,
     employeeName: fullName,
     department,
+    title: obj.title || '',
     date: obj.date,
     updateText: obj.updateText,
     tasksCompleted: Array.isArray(obj.tasksCompleted) ? obj.tasksCompleted : [],
@@ -103,6 +104,7 @@ class DailyUpdateService {
       employee: employee._id,
       user: user._id,
       department: employee.department || 'General',
+      title: typeof updateData.title === 'string' ? updateData.title.trim() : '',
       date: dateStr,
       updateText: text,
       tasksCompleted: Array.isArray(updateData.tasksCompleted)

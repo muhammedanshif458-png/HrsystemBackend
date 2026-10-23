@@ -5,6 +5,7 @@ const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
+const { getDateKey, getUtcDateForKey, classifyCheckIn, getScheduleForDepartment } = require('../utils/attendanceSchedule');
 
 /**
  * Normalize date to UTC midnight for consistent daily tracking
@@ -43,8 +44,10 @@ class StaffService {
    */
   async getDashboard(user) {
     const employee = await this.getEmployeeOrThrow(user);
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    const today = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(today, schedule.timeZone)) : getMidnightToday(today);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     // Check today's attendance
     const todayAttendance = await Attendance.findOne({
@@ -152,20 +155,25 @@ class StaffService {
   /**
    * Attendance check-in
    */
-  async checkIn(user, remarks = '') {
+  async checkIn(user, remarks = '', checkIn = new Date()) {
     const employee = await this.getEmployeeOrThrow(user);
 
     if (employee.status !== 'ACTIVE') {
       throw new AppError(`Cannot check in. Employee status is currently: ${employee.status}`, 400);
     }
 
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    if (!(checkIn instanceof Date) || Number.isNaN(checkIn.getTime())) {
+      throw new AppError('Invalid check-in timestamp', 400);
+    }
+    // Without a configured schedule, retain the legacy UTC workday and do not infer lateness.
+    const date = schedule ? getUtcDateForKey(getDateKey(checkIn, schedule.timeZone)) : getMidnightToday(checkIn);
+    const dayEnd = new Date(date.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     // Check if attendance already recorded today
     const existingAttendance = await Attendance.findOne({
       employee: employee._id,
-      date: { $gte: todayMidnight, $lte: todayEnd }
+      date: { $gte: date, $lte: dayEnd }
     });
 
     if (existingAttendance) {
@@ -174,9 +182,10 @@ class StaffService {
 
     const attendance = new Attendance({
       employee: employee._id,
-      date: todayMidnight,
-      checkIn: new Date(),
+      date,
+      checkIn,
       status: 'PRESENT',
+      ...classifyCheckIn(checkIn, schedule),
       remarks: remarks || ''
     });
 
@@ -189,9 +198,10 @@ class StaffService {
    */
   async checkOut(user, remarks = '') {
     const employee = await this.getEmployeeOrThrow(user);
-
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    const today = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(today, schedule.timeZone)) : getMidnightToday(today);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const attendance = await Attendance.findOne({
       employee: employee._id,

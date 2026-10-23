@@ -237,6 +237,20 @@ class HRController {
       next(err);
     }
   }
+
+  async setDepartmentSchedule(req, res, next) {
+    try {
+      const schedule = await hrService.setDepartmentSchedule(req.params.deptKey, req.body);
+      return sendSuccess(res, 'Department attendance schedule saved successfully', schedule);
+    } catch (err) { next(err); }
+  }
+
+  async getDepartmentSchedule(req, res, next) {
+    try {
+      const schedule = await hrService.getDepartmentSchedule(req.params.deptKey);
+      return sendSuccess(res, 'Department attendance schedule retrieved successfully', schedule);
+    } catch (err) { next(err); }
+  }
 }
 
 module.exports = new HRController();

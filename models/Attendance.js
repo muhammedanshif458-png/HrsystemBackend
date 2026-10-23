@@ -15,6 +15,10 @@ const attendanceSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    late: { type: Boolean, default: false },
+    scheduleConfigured: { type: Boolean, default: false },
+    scheduledCheckIn: { type: String, default: null },
+    scheduleTimeZone: { type: String, default: null },
     checkOut: {
       type: Date,
       default: null

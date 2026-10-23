@@ -228,8 +228,8 @@ Error format:
 
 ### `GET /api/hr/attendance`
 - **Auth:** HR
-- **Query:** `page`, `limit`, `employeeId`, `startDate`, `endDate`, `status`
-- **Success (200):** Paginated attendance list.
+- **Query:** `page`, `limit`, `employeeId`, `department`, `startDate`, `endDate`, `status` (`LATE` selects checked-in late records)
+- **Success (200):** Paginated attendance list including `checkIn`, `late`, `scheduledCheckIn`, `scheduleTimeZone`, and populated employee department.
 
 ### `GET /api/hr/attendance/:employeeId`
 - **Auth:** HR
@@ -243,7 +243,13 @@ Error format:
 ### `POST /api/staff/attendance/check-in`
 - **Auth:** STAFF
 - **Body:** `{ "remarks": "..." }`
-- **Success (201):** Records check-in; rejects duplicate check-in for the same day with `400 Bad Request`.
+- **Success (201):** Records check-in, `late`, and the schedule snapshot; rejects duplicate check-in for the same department-local day with `400 Bad Request`.
+
+### `PUT /api/hr/departments/:deptKey/schedule`
+- **Auth:** HR
+- **Body:** `{ "checkInTime": "09:00", "timeZone": "Asia/Kolkata", "gracePeriodMinutes": 0 }`
+- The path value is the employee department name stored in the Employee record. `gracePeriodMinutes` defaults to zero; HR must configure an explicit value to apply grace.
+- Departments without a schedule are recorded with `scheduleConfigured: false` and are not classified late.
 
 ### `POST /api/staff/attendance/check-out`
 - **Auth:** STAFF
