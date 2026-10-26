@@ -16,84 +16,29 @@ class HRService {
   /**
    * Get HR Dashboard statistics
    */
-  async getDashboardStats() {
-    const { startOfDay, endOfDay } = getDayBounds();
-
-    const [
-      totalEmployees,
-      activeEmployees,
-      inactiveEmployees,
-      todayAttendanceCounts,
-      lateArrivals,
-      todayLateCount,
-      pendingLeaves,
-      approvedLeaves
-    ] = await Promise.all([
-      async getDashboardStats(dateKey = null) {
-        const { startOfDay, endOfDay } = getDayBounds(dateKey);
-        const [totalEmployees, activeEmployees, inactiveEmployees, active, todayRows, approvedTodayLeaves, pendingLeaves, approvedLeaves] = await Promise.all([
-          Employee.countDocuments(),
-          Employee.countDocuments({ status: 'ACTIVE' }),
-          Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
-          Attendance.aggregate([
-            {
-              $match: {
-                date: { $gte: startOfDay, $lte: endOfDay }
-              }
-            },
-            {
-              $group: {
-                _id: '$status',
-                count: { $sum: 1 }
-              }
-            }
-          ]),
-          Attendance.find({ checkIn: { $ne: null }, late: true })
-            .select('date checkIn scheduleTimeZone').lean(),
-          Attendance.countDocuments({
-            date: { $gte: startOfDay, $lte: endOfDay },
-            $or: [{ status: 'LATE' }, { isLate: true }]
-          }),
-          Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
-          Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } }).select('employee status late checkIn workMode createdAt').populate('employee', 'status workMode').sort({ checkIn: -1, createdAt: -1 }).lean(),
-          Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
-          Leave.countDocuments({ status: 'PENDING' }),
-          Leave.countDocuments({ status: 'APPROVED' })
-        ]);
-
-        let todayPresent = 0;
-        let todayAbsent = 0;
-
-        todayAttendanceCounts.forEach((group) => {
-          if (group._id === 'PRESENT' || group._id === 'HALF_DAY' || group._id === 'LATE') {
-            todayPresent += group.count;
-          } else if (group._id === 'ABSENT') {
-            todayAbsent += group.count;
-          }
-        });
-
-        const lateRecords = lateArrivals.filter(record => isAttendanceForCurrentWorkday(record));
-
-        const metrics = summarizeAttendanceDay({
-          activeEmployeeIds: active.map(employee => employee._id),
-          attendanceRows: todayRows,
-          approvedLeaveRows: approvedTodayLeaves,
-          dateKey: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
-        });
-        return {
-          totalEmployees,
-          activeEmployees,
-          inactiveEmployees,
-          todayPresent,
-          todayLate: lateRecords.length,
-          todayAbsent,
-          lateArrivals: lateRecords.length,
-          pendingLeaves,
-          approvedLeaves
+  async getDashboardStats(dateKey = null) {
+    const { startOfDay, endOfDay } = getDayBounds(dateKey);
+    const [totalEmployees, activeEmployees, inactiveEmployees, active, todayRows, approvedTodayLeaves, pendingLeaves, approvedLeaves] = await Promise.all([
+      Employee.countDocuments(),
+      Employee.countDocuments({ status: 'ACTIVE' }),
+      Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
+      Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
+      Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } }).select('employee status late checkIn workMode createdAt').populate('employee', 'status workMode').sort({ checkIn: -1, createdAt: -1 }).lean(),
+      Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
+      Leave.countDocuments({ status: 'PENDING' }),
+      Leave.countDocuments({ status: 'APPROVED' })
+    ]);
+    const metrics = summarizeAttendanceDay({
+      activeEmployeeIds: active.map(employee => employee._id),
+      attendanceRows: todayRows,
+      approvedLeaveRows: approvedTodayLeaves,
+      dateKey: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
+    });
+    return {
       totalEmployees, activeEmployees, inactiveEmployees, ...metrics,
-          pendingLeaves, approvedLeaves
-        };
-      }
+      pendingLeaves, approvedLeaves
+    };
+  }
 
   /**
    * Get list of employees with search, filter, and pagination
@@ -637,39 +582,31 @@ return {
       $or: [{ late: true }, { isLate: true }, { status: 'LATE' }]
     };
     const lateRows = await Attendance.find(lateQuery)
-      .populate('employee', 'employeeId firstName lastName email department designation')
-    if (status === 'LATE') {
-      const lateFilter = { ...filter };
-      delete lateFilter.late;
-      delete lateFilter.checkIn;
-      const lateRows = await Attendance.find({ ...lateFilter, late: true, checkIn: { $ne: null } })
+      .populate('employee', 'employeeId firstName lastName department designation status workMode')
+      .sort({ date: -1, createdAt: -1 })
+      .lean();
+
+    // If no explicit date range was supplied, restrict to current workday per schedule timezone
+    const currentWorkdayRows = (!startDate && !endDate)
+      ? lateRows.filter(row => isAttendanceForCurrentWorkday(row))
+      : lateRows;
+
+    total = currentWorkdayRows.length;
+    rawAttendance = currentWorkdayRows.slice(skip, skip + limit);
+  } else {
+    if (status) {
+      filter.status = status.toUpperCase();
+    }
+    [rawAttendance, total] = await Promise.all([
+      Attendance.find(filter)
         .populate('employee', 'employeeId firstName lastName department designation status workMode')
         .sort({ date: -1, createdAt: -1 })
-        .lean();
-
-      // If no explicit date range was supplied, restrict to current workday per schedule timezone
-      const currentWorkdayRows = (!startDate && !endDate)
-        ? lateRows.filter(row => isAttendanceForCurrentWorkday(row))
-        : lateRows;
-
-      const currentWorkdayRows = (startDate || endDate) ? lateRows : lateRows.filter(row => isAttendanceForCurrentWorkday(row));
-      total = currentWorkdayRows.length;
-      rawAttendance = currentWorkdayRows.slice(skip, skip + limit);
-    } else {
-      if (status) {
-        filter.status = status.toUpperCase();
-      }
-      [rawAttendance, total] = await Promise.all([
-        Attendance.find(filter)
-          .populate('employee', 'employeeId firstName lastName email department designation')
-          .populate('employee', 'employeeId firstName lastName department designation status workMode')
-          .sort({ date: -1, createdAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Attendance.countDocuments(filter)
-      ]);
-    }
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Attendance.countDocuments(filter)
+    ]);
+  }
 
     const attendance = await Promise.all(
       rawAttendance.map(async (rec) => {
@@ -872,10 +809,6 @@ return {
     await leave.save();
 
     const updated = await Leave.findById(leave._id)
-      .populate('employee', 'employeeId firstName lastName department designation')
-      .populate('approvedBy', 'firstName lastName email')
-      .populate('document');
-    const updated = await Leave.findById(leave._id)
       .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .populate('approvedBy', 'firstName lastName email')
       .populate('document');
@@ -906,10 +839,6 @@ return {
     leave.rejectionReason = rejectionReason || 'Leave request was not approved by HR.';
     await leave.save();
 
-    const updated = await Leave.findById(leave._id)
-      .populate('employee', 'employeeId firstName lastName department designation')
-      .populate('approvedBy', 'firstName lastName email')
-      .populate('document');
     const updated = await Leave.findById(leave._id)
       .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .populate('approvedBy', 'firstName lastName email')
