@@ -15,7 +15,8 @@ const {
   rejectLeaveValidator,
   mongoIdParamValidator,
   birthdaysValidator,
-  hrDailyUpdatesQueryValidator
+  hrDailyUpdatesQueryValidator,
+  departmentScheduleValidator
 } = require('../validators/hrValidator');
 
 
@@ -25,9 +26,15 @@ router.use(authMiddleware, roleMiddleware('HR', 'SUPER_ADMIN'));
 // Dashboard
 router.get('/dashboard', hrController.getDashboard);
 
-// Departments
+// Departments & Schedules
 router.get('/departments', hrController.getDepartments);
+router.get('/departments/schedules', hrController.getDepartmentSchedules);
+router.post('/departments/schedules', departmentScheduleValidator, hrController.createDepartmentSchedule);
 router.get('/departments/:deptKey', hrController.getDepartmentByKey);
+router.get('/departments/:deptKey/schedule', hrController.getDepartmentScheduleByKey);
+router.post('/departments/:deptKey/schedule', departmentScheduleValidator, hrController.createDepartmentSchedule);
+router.get('/department-schedules', hrController.getDepartmentSchedules);
+router.post('/department-schedules', departmentScheduleValidator, hrController.createDepartmentSchedule);
 
 // Company-Wide Birthdays (Tech & Telecalling)
 router.get('/birthdays', birthdaysValidator, hrController.getBirthdays);
@@ -53,6 +60,7 @@ router.get('/documents/:docId/download', documentController.downloadDocument);
 
 // Attendance
 router.get('/attendance', hrController.getAttendance);
+router.post('/attendance/reclassify', hrController.reclassifyHistoricalAttendance);
 router.get('/attendance/:employeeId', hrController.getAttendanceByEmployeeId);
 
 // Leaves

@@ -2,7 +2,9 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
+const DepartmentSchedule = require('../models/DepartmentSchedule');
 const Leave = require('../models/Leave');
+const { calculateLateness } = require('../utils/scheduleHelper');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
@@ -28,6 +30,7 @@ class HRService {
       activeEmployees,
       inactiveEmployees,
       todayAttendanceCounts,
+      todayLateCount,
       pendingLeaves,
       approvedLeaves
     ] = await Promise.all([
@@ -47,6 +50,10 @@ class HRService {
           }
         }
       ]),
+      Attendance.countDocuments({
+        date: { $gte: startOfDay, $lte: endOfDay },
+        $or: [{ status: 'LATE' }, { isLate: true }]
+      }),
       Leave.countDocuments({ status: 'PENDING' }),
       Leave.countDocuments({ status: 'APPROVED' })
     ]);
@@ -55,7 +62,7 @@ class HRService {
     let todayAbsent = 0;
 
     todayAttendanceCounts.forEach((group) => {
-      if (group._id === 'PRESENT' || group._id === 'HALF_DAY') {
+      if (group._id === 'PRESENT' || group._id === 'HALF_DAY' || group._id === 'LATE') {
         todayPresent += group.count;
       } else if (group._id === 'ABSENT') {
         todayAbsent += group.count;
@@ -67,6 +74,8 @@ class HRService {
       activeEmployees,
       inactiveEmployees,
       todayPresent,
+      todayLate: todayLateCount,
+      lateArrivals: todayLateCount,
       todayAbsent,
       pendingLeaves,
       approvedLeaves
@@ -112,8 +121,16 @@ class HRService {
 
     const totalPages = Math.ceil(total / limit) || 1;
 
+    const enrichedEmployees = employees.map(emp => ({
+      ...emp,
+      id: emp._id ? emp._id.toString() : '',
+      name: `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
+      phoneNumber: emp.phone || '',
+      role: emp.designation || (emp.user?.role === 'HR' ? 'HR' : 'Staff')
+    }));
+
     return {
-      employees,
+      employees: enrichedEmployees,
       pagination: {
         page,
         limit,
@@ -508,7 +525,7 @@ class HRService {
   /**
    * Get attendance records for HR
    */
-  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status }) {
+  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status, department }) {
     page = Math.max(1, parseInt(page, 10));
     limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
     const skip = (page - 1) * limit;
@@ -530,8 +547,39 @@ class HRService {
       }
     }
 
+    if (department && department.trim() !== '') {
+      const dept = department.trim();
+      const canonicalKey = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(dept) : dept.toUpperCase();
+      const patterns = [
+        new RegExp(`^${dept}$`, 'i'),
+        new RegExp(`^${canonicalKey}$`, 'i')
+      ];
+      if (canonicalKey === 'TECH') {
+        patterns.push(/tech/i, /engineering/i);
+      } else if (canonicalKey === 'TELECALLING') {
+        patterns.push(/tele/i, /calling/i, /client/i);
+      }
+
+      const matchingEmps = await Employee.find({
+        $or: patterns.map(p => ({ department: p }))
+      }).select('_id');
+
+      const empIds = matchingEmps.map(e => e._id);
+      if (filter.employee) {
+        if (!empIds.some(id => id.equals(filter.employee))) {
+          return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+        }
+      } else {
+        filter.employee = { $in: empIds };
+      }
+    }
+
     if (status) {
-      filter.status = status;
+      if (status.toUpperCase() === 'LATE') {
+        filter.$or = [{ status: 'LATE' }, { isLate: true }];
+      } else {
+        filter.status = status.toUpperCase();
+      }
     }
 
     if (startDate || endDate) {
@@ -544,15 +592,87 @@ class HRService {
       }
     }
 
-    const [attendance, total] = await Promise.all([
+    const [rawAttendance, total] = await Promise.all([
       Attendance.find(filter)
-        .populate('employee', 'employeeId firstName lastName department designation')
+        .populate('employee', 'employeeId firstName lastName email department designation')
         .sort({ date: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       Attendance.countDocuments(filter)
     ]);
+
+    const attendance = await Promise.all(
+      rawAttendance.map(async (rec) => {
+        const isLateRec = Boolean(rec.isLate || rec.status === 'LATE');
+        let minutesLate = rec.minutesLate || 0;
+        let snapshot = rec.scheduleSnapshot;
+
+        if (isLateRec && minutesLate === 0 && rec.checkIn) {
+          if (!snapshot && rec.employee?.department) {
+            const effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, rec.date);
+            if (effSched) {
+              snapshot = {
+                scheduleId: effSched._id,
+                department: effSched.department,
+                scheduledCheckIn: effSched.checkInTime,
+                scheduledCheckOut: effSched.checkOutTime || '18:00',
+                gracePeriodMinutes: effSched.gracePeriodMinutes || 0,
+                timezone: effSched.timezone || 'Asia/Kolkata'
+              };
+            }
+          }
+          if (snapshot && snapshot.scheduledCheckIn) {
+            const calc = calculateLateness(new Date(rec.checkIn), snapshot);
+            minutesLate = calc.minutesLate;
+          }
+        }
+
+        const workingHoursNum = Number(rec.workingHours) || 0;
+        const workedHoursInt = Math.floor(workingHoursNum);
+        const workedMinsInt = Math.round((workingHoursNum - workedHoursInt) * 60);
+        const workedDuration = workingHoursNum > 0
+          ? (workedMinsInt > 0 ? `${workedHoursInt}h ${workedMinsInt}m` : `${workedHoursInt}h`)
+          : '0h';
+
+        const totalBreakMins = Number(rec.totalBreakMinutes) || (Array.isArray(rec.breaks) ? rec.breaks.reduce((s, b) => s + (b.durationMinutes || 0), 0) : 0);
+        const formatBreakDurationStr = (mins = 0) => {
+          const m = Number(mins) || 0;
+          if (!m) return '0m';
+          const hours = Math.floor(m / 60);
+          const rem = m % 60;
+          if (hours > 0 && rem > 0) return `${hours}h ${rem}m`;
+          if (hours > 0) return `${hours}h`;
+          return `${rem}m`;
+        };
+
+        return {
+          ...rec,
+          id: rec._id ? rec._id.toString() : '',
+          staffId: rec.employee?._id ? rec.employee._id.toString() : (rec.employee ? rec.employee.toString() : ''),
+          employeeId: rec.employee?.employeeId || '',
+          checkInTime: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
+          checkOutTime: rec.checkOut ? new Date(rec.checkOut).toISOString() : null,
+          checkInAt: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
+          workedDuration,
+          breakDuration: formatBreakDurationStr(totalBreakMins),
+          totalBreakMinutes: totalBreakMins,
+          breaks: rec.breaks || [],
+          activeBreak: rec.activeBreak || null,
+          breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (rec.activeBreak?.startTime ? new Date(rec.activeBreak.startTime).toISOString() : null),
+          isLate: isLateRec,
+          late: isLateRec,
+          minutesLate,
+          scheduledCheckIn: snapshot?.scheduledCheckIn || snapshot?.checkInTime || null,
+          scheduledCheckOut: snapshot?.scheduledCheckOut || snapshot?.checkOutTime || null,
+          scheduleTimeZone: snapshot?.timezone || null,
+          timezone: snapshot?.timezone || null,
+          gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0,
+          scheduleSnapshot: snapshot || rec.scheduleSnapshot || null,
+          department: rec.employee?.department || rec.scheduleSnapshot?.department || null
+        };
+      })
+    );
 
     const totalPages = Math.ceil(total / limit) || 1;
 
@@ -1029,6 +1149,157 @@ class HRService {
       throw new AppError(`Department '${deptKey}' not found`, 404);
     }
     return dept;
+  }
+
+  /**
+   * Create or update a department schedule (effective-date versioned)
+   */
+  async createDepartmentSchedule({ department, checkInTime, checkOutTime = '18:00', gracePeriodMinutes = 0, timezone = 'Asia/Kolkata', effectiveDate, description = '', user = null }) {
+    if (!department) {
+      throw new AppError('Department is required', 400);
+    }
+    if (!checkInTime) {
+      throw new AppError('Check-in time is required', 400);
+    }
+
+    const effDate = effectiveDate ? new Date(effectiveDate) : new Date();
+    if (isNaN(effDate.getTime())) {
+      throw new AppError('Invalid effective date format', 400);
+    }
+
+    const canonicalDept = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
+
+    const schedule = new DepartmentSchedule({
+      department: canonicalDept,
+      departmentDisplay: department.trim(),
+      checkInTime: checkInTime.trim(),
+      checkOutTime: (checkOutTime || '18:00').trim(),
+      gracePeriodMinutes: Number(gracePeriodMinutes) || 0,
+      timezone: timezone.trim() || 'Asia/Kolkata',
+      effectiveDate: effDate,
+      description: description ? description.trim() : '',
+      createdBy: user ? user._id : null,
+      updatedBy: user ? user._id : null
+    });
+
+    await schedule.save();
+    return schedule;
+  }
+
+  /**
+   * Get all schedule versions, optionally filtered by department
+   */
+  async getDepartmentSchedules({ department } = {}) {
+    const filter = {};
+    if (department) {
+      filter.department = department.trim().toUpperCase();
+    }
+    return await DepartmentSchedule.find(filter)
+      .sort({ department: 1, effectiveDate: -1, createdAt: -1 })
+      .populate('createdBy', 'firstName lastName email')
+      .populate('updatedBy', 'firstName lastName email')
+      .lean();
+  }
+
+  /**
+   * Get effective schedule for a department key (along with historical versions)
+   */
+  async getDepartmentScheduleByKey(deptKey, targetDate = new Date()) {
+    const key = (deptKey || '').trim().toUpperCase();
+    const effectiveSchedule = await DepartmentSchedule.getEffectiveSchedule(key, targetDate);
+    const history = await DepartmentSchedule.find({ department: key })
+      .sort({ effectiveDate: -1, createdAt: -1 })
+      .populate('createdBy', 'firstName lastName email')
+      .lean();
+
+    return {
+      department: key,
+      effectiveSchedule,
+      history
+    };
+  }
+
+  /**
+   * Safe, auditable historical reclassification of attendance records
+   */
+  async reclassifyHistoricalAttendance({ startDate, endDate, department, dryRun = true, user = null }) {
+    const filter = {};
+    if (startDate || endDate) {
+      filter.date = {};
+      if (startDate) filter.date.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.date.$lte = end;
+      }
+    }
+
+    if (department && department.trim() !== '') {
+      const canonical = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
+      const emps = await Employee.find({
+        $or: [
+          { department: new RegExp(`^${department.trim()}$`, 'i') },
+          { department: new RegExp(`^${canonical}$`, 'i') }
+        ]
+      }).select('_id');
+      filter.employee = { $in: emps.map(e => e._id) };
+    }
+
+    const records = await Attendance.find(filter).populate('employee');
+    const modifications = [];
+
+    for (const record of records) {
+      if (!record.checkIn || !record.employee?.department) continue;
+
+      const schedule = await DepartmentSchedule.getEffectiveSchedule(record.employee.department, record.date);
+      const latenessResult = calculateLateness(record.checkIn, schedule);
+
+      const isChanged = record.isLate !== latenessResult.isLate ||
+                        record.minutesLate !== latenessResult.minutesLate ||
+                        (latenessResult.isLate && record.status !== 'LATE');
+
+      const plan = {
+        attendanceId: record._id,
+        employeeId: record.employee.employeeId,
+        employeeName: `${record.employee.firstName} ${record.employee.lastName}`,
+        department: record.employee.department,
+        date: record.date,
+        checkIn: record.checkIn,
+        current: {
+          status: record.status,
+          isLate: record.isLate,
+          minutesLate: record.minutesLate
+        },
+        proposed: {
+          status: latenessResult.isLate ? 'LATE' : record.status,
+          isLate: latenessResult.isLate,
+          minutesLate: latenessResult.minutesLate,
+          scheduleStatus: latenessResult.scheduleStatus,
+          scheduleSnapshot: latenessResult.scheduleSnapshot
+        },
+        isChanged
+      };
+
+      modifications.push(plan);
+
+      if (!dryRun && isChanged) {
+        record.isLate = latenessResult.isLate;
+        record.minutesLate = latenessResult.minutesLate;
+        record.scheduleStatus = latenessResult.scheduleStatus;
+        record.scheduleSnapshot = latenessResult.scheduleSnapshot;
+        if (latenessResult.isLate) {
+          record.status = 'LATE';
+        }
+        await record.save();
+      }
+    }
+
+    return {
+      dryRun,
+      totalScanned: records.length,
+      changedCount: modifications.filter(m => m.isChanged).length,
+      modifications
+    };
   }
 }
 

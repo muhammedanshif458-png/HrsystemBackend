@@ -237,6 +237,70 @@ class HRController {
       next(err);
     }
   }
+
+  /**
+   * POST /api/hr/departments/schedules or /api/hr/departments/:deptKey/schedule
+   */
+  async createDepartmentSchedule(req, res, next) {
+    try {
+      const scheduleData = {
+        department: req.body.department || req.params.deptKey,
+        checkInTime: req.body.checkInTime,
+        checkOutTime: req.body.checkOutTime,
+        gracePeriodMinutes: req.body.gracePeriodMinutes,
+        timezone: req.body.timezone,
+        effectiveDate: req.body.effectiveDate,
+        description: req.body.description,
+        user: req.user
+      };
+      const schedule = await hrService.createDepartmentSchedule(scheduleData);
+      return sendSuccess(res, 'Department schedule configured successfully', schedule, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/departments/schedules
+   */
+  async getDepartmentSchedules(req, res, next) {
+    try {
+      const schedules = await hrService.getDepartmentSchedules(req.query);
+      return sendSuccess(res, 'Department schedules retrieved successfully', schedules);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/departments/:deptKey/schedule
+   */
+  async getDepartmentScheduleByKey(req, res, next) {
+    try {
+      const scheduleInfo = await hrService.getDepartmentScheduleByKey(req.params.deptKey, req.query.date);
+      return sendSuccess(res, 'Department schedule details retrieved successfully', scheduleInfo);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/attendance/reclassify
+   */
+  async reclassifyHistoricalAttendance(req, res, next) {
+    try {
+      const result = await hrService.reclassifyHistoricalAttendance({
+        startDate: req.body.startDate,
+        endDate: req.body.endDate,
+        department: req.body.department,
+        dryRun: req.body.dryRun !== false,
+        user: req.user
+      });
+      return sendSuccess(res, 'Attendance reclassification evaluation completed', result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new HRController();

@@ -12,6 +12,8 @@ const {
   updateProfileValidator,
   checkInValidator,
   checkOutValidator,
+  breakStartValidator,
+  breakEndValidator,
   applyLeaveValidator,
   leaveIdParamValidator,
   dailyUpdateValidator,
@@ -41,6 +43,12 @@ router.get('/documents/:docId/download', documentController.downloadDocument);
 // Attendance
 router.post('/attendance/check-in', checkInValidator, staffController.checkIn);
 router.post('/attendance/check-out', checkOutValidator, staffController.checkOut);
+router.post('/attendance/break-start', breakStartValidator, staffController.startBreak);
+router.post('/attendance/break-end', breakEndValidator, staffController.endBreak);
+router.post('/attendance/break/start', breakStartValidator, staffController.startBreak);
+router.post('/attendance/break/end', breakEndValidator, staffController.endBreak);
+router.post('/attendance/breaks/start', breakStartValidator, staffController.startBreak);
+router.post('/attendance/breaks/end', breakEndValidator, staffController.endBreak);
 router.get('/attendance', staffController.getAttendance);
 
 // Leaves
