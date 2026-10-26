@@ -184,6 +184,7 @@ class StaffService {
       employee: employee._id,
       date,
       checkIn,
+      workMode: employee.workMode || null,
       status: 'PRESENT',
       ...classifyCheckIn(checkIn, schedule),
       remarks: remarks || ''

@@ -3,81 +3,39 @@ const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
-const { isAttendanceForCurrentWorkday } = require('../utils/attendanceSchedule');
+const { isAttendanceForCurrentWorkday, getDateKey, getDayBoundsForKey } = require('../utils/attendanceSchedule');
 const Leave = require('../models/Leave');
+const { summarizeAttendanceDay } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
-/**
- * Helper to normalize date to UTC midnight
- */
-const getDayBounds = (dateStr = null) => {
-  const date = dateStr ? new Date(dateStr) : new Date();
-  const startOfDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
-  return { startOfDay, endOfDay };
-};
+const getDayBounds = (dateStr = null) => getDayBoundsForKey(dateStr || getDateKey(new Date(), 'Asia/Kolkata'));
 
 class HRService {
   /**
    * Get HR Dashboard statistics
    */
-  async getDashboardStats() {
-    const { startOfDay, endOfDay } = getDayBounds();
-
-    const [
-      totalEmployees,
-      activeEmployees,
-      inactiveEmployees,
-      todayAttendanceCounts,
-      lateArrivals,
-      pendingLeaves,
-      approvedLeaves
-    ] = await Promise.all([
+  async getDashboardStats(dateKey = null) {
+    const { startOfDay, endOfDay } = getDayBounds(dateKey);
+    const [totalEmployees, activeEmployees, inactiveEmployees, active, todayRows, approvedTodayLeaves, pendingLeaves, approvedLeaves] = await Promise.all([
       Employee.countDocuments(),
       Employee.countDocuments({ status: 'ACTIVE' }),
       Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
-      Attendance.aggregate([
-        {
-          $match: {
-            date: { $gte: startOfDay, $lte: endOfDay }
-          }
-        },
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 }
-          }
-        }
-      ]),
-      Attendance.find({ checkIn: { $ne: null }, late: true })
-        .select('date checkIn scheduleTimeZone').lean(),
+      Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
+      Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } }).select('employee status late checkIn workMode createdAt').populate('employee', 'status workMode').sort({ checkIn: -1, createdAt: -1 }).lean(),
+      Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
       Leave.countDocuments({ status: 'PENDING' }),
       Leave.countDocuments({ status: 'APPROVED' })
     ]);
-
-    let todayPresent = 0;
-    let todayAbsent = 0;
-
-    todayAttendanceCounts.forEach((group) => {
-      if (group._id === 'PRESENT' || group._id === 'HALF_DAY') {
-        todayPresent += group.count;
-      } else if (group._id === 'ABSENT') {
-        todayAbsent += group.count;
-      }
+    const metrics = summarizeAttendanceDay({
+      activeEmployeeIds: active.map(employee => employee._id),
+      attendanceRows: todayRows,
+      approvedLeaveRows: approvedTodayLeaves,
+      dateKey: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
     });
-
-    const lateRecords = lateArrivals.filter(record => isAttendanceForCurrentWorkday(record));
-
     return {
-      totalEmployees,
-      activeEmployees,
-      inactiveEmployees,
-      todayPresent,
-      todayAbsent,
-      lateArrivals: lateRecords.length,
-      pendingLeaves,
-      approvedLeaves
+      totalEmployees, activeEmployees, inactiveEmployees, ...metrics,
+      pendingLeaves, approvedLeaves
     };
   }
 
@@ -516,7 +474,7 @@ class HRService {
   /**
    * Get attendance records for HR
    */
-  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status, department }) {
+  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status, department, search, workMode }) {
     page = Math.max(1, parseInt(page, 10));
     limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
     const skip = (page - 1) * limit;
@@ -550,6 +508,32 @@ class HRService {
       }
     }
 
+    if (search && search.trim()) {
+      const searchText = search.trim().replace(/[^a-z0-9@ _.-]/gi, '');
+      if (!searchText) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+      const terms = searchText.split(/\s+/).filter(Boolean);
+      const matches = await Employee.find({ $and: terms.map(term => { const regex = new RegExp(term, 'i'); return { $or: [{ employeeId: regex }, { firstName: regex }, { lastName: regex }, { email: regex }] }; }) }).select('_id').lean();
+      const matchingIds = matches.map(employee => String(employee._id));
+      if (!matchingIds.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+      if (filter.employee) {
+        const currentIds = filter.employee.$in ? filter.employee.$in.map(String) : [String(filter.employee)];
+        const intersection = currentIds.filter(id => matchingIds.includes(id));
+        if (!intersection.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+        filter.employee = { $in: intersection };
+      } else {
+        filter.employee = { $in: matchingIds };
+      }
+    }
+
+    if (workMode && workMode.toLowerCase() !== 'all') {
+      const modeRegex = new RegExp('^' + workMode.trim() + '$', 'i');
+      const modeEmployees = await Employee.find({ workMode: modeRegex }).select('_id').lean();
+      const modeIds = modeEmployees.map(employee => employee._id);
+      const modeMatch = [{ workMode: modeRegex }];
+      if (modeIds.length) modeMatch.push({ employee: { $in: modeIds }, workMode: { $in: [null, ''] } });
+      filter.$and = [...(filter.$and || []), { $or: modeMatch }];
+    }
+
     if (status === 'LATE') {
       filter.late = true;
       filter.checkIn = { $ne: null };
@@ -559,12 +543,8 @@ class HRService {
 
     if (startDate || endDate) {
       filter.date = {};
-      if (startDate) filter.date.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.date.$lte = end;
-      }
+      if (startDate) filter.date.$gte = getDayBounds(startDate).startOfDay;
+      if (endDate) filter.date.$lte = getDayBounds(endDate).endOfDay;
     }
 
     let attendance;
@@ -574,16 +554,16 @@ class HRService {
       delete lateFilter.late;
       delete lateFilter.checkIn;
       const lateRows = await Attendance.find({ ...lateFilter, late: true, checkIn: { $ne: null } })
-        .populate('employee', 'employeeId firstName lastName department designation')
+        .populate('employee', 'employeeId firstName lastName department designation status workMode')
         .sort({ date: -1, createdAt: -1 })
         .lean();
-      const currentWorkdayRows = lateRows.filter(row => isAttendanceForCurrentWorkday(row));
+      const currentWorkdayRows = (startDate || endDate) ? lateRows : lateRows.filter(row => isAttendanceForCurrentWorkday(row));
       total = currentWorkdayRows.length;
       attendance = currentWorkdayRows.slice(skip, skip + limit);
     } else {
       [attendance, total] = await Promise.all([
         Attendance.find(filter)
-          .populate('employee', 'employeeId firstName lastName department designation')
+          .populate('employee', 'employeeId firstName lastName department designation status workMode')
           .sort({ date: -1, createdAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -721,7 +701,7 @@ class HRService {
     await leave.save();
 
     const updated = await Leave.findById(leave._id)
-      .populate('employee', 'employeeId firstName lastName department designation')
+      .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .populate('approvedBy', 'firstName lastName email')
       .populate('document');
 
@@ -752,7 +732,7 @@ class HRService {
     await leave.save();
 
     const updated = await Leave.findById(leave._id)
-      .populate('employee', 'employeeId firstName lastName department designation')
+      .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .populate('approvedBy', 'firstName lastName email')
       .populate('document');
 

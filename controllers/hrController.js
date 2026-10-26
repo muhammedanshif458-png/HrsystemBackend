@@ -10,7 +10,7 @@ class HRController {
    */
   async getDashboard(req, res, next) {
     try {
-      const stats = await hrService.getDashboardStats();
+      const stats = await hrService.getDashboardStats(req.query.date);
       return sendSuccess(res, 'HR dashboard statistics fetched successfully', stats);
     } catch (err) {
       next(err);

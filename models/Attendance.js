@@ -16,6 +16,7 @@ const attendanceSchema = new mongoose.Schema(
       default: null
     },
     late: { type: Boolean, default: false },
+    workMode: { type: String, trim: true, default: null },
     scheduleConfigured: { type: Boolean, default: false },
     scheduledCheckIn: { type: String, default: null },
     scheduleTimeZone: { type: String, default: null },

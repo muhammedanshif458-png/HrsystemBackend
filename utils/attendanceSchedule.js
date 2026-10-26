@@ -18,6 +18,13 @@ const getDateKey = (date, timeZone) => {
 
 const getUtcDateForKey = (key) => new Date(`${key}T00:00:00.000Z`);
 
+const getDayBoundsForKey = (key) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) throw new Error('Invalid attendance date; expected YYYY-MM-DD');
+  const startOfDay = getUtcDateForKey(key);
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return { startOfDay, endOfDay };
+};
+
 const isAttendanceForCurrentWorkday = (attendance, now = new Date()) => {
   if (!attendance?.date) return false;
   const timeZone = attendance.scheduleTimeZone || 'UTC';
@@ -41,4 +48,4 @@ const getScheduleForDepartment = (department) => DepartmentSchedule.findOne({
   department: new RegExp(`^${String(department).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
 }).lean();
 
-module.exports = { getLocalParts, getDateKey, getUtcDateForKey, isAttendanceForCurrentWorkday, classifyCheckIn, getScheduleForDepartment };
+module.exports = { getLocalParts, getDateKey, getUtcDateForKey, getDayBoundsForKey, isAttendanceForCurrentWorkday, classifyCheckIn, getScheduleForDepartment };
