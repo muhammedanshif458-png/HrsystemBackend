@@ -118,6 +118,6 @@ departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmen
     .lean();
 };
 
-const DepartmentSchedule = mongoose.model('DepartmentSchedule', departmentScheduleSchema);
+const DepartmentSchedule = mongoose.models.DepartmentSchedule || mongoose.model('DepartmentSchedule', departmentScheduleSchema);
 
 module.exports = DepartmentSchedule;
