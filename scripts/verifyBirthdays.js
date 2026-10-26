@@ -5,10 +5,10 @@
 
 const mongoose = require('mongoose');
 const http = require('http');
-const { app } = require('C:/Users/Admin/Downloads/HrsystemBackend/server');
-const User = require('C:/Users/Admin/Downloads/HrsystemBackend/models/User');
-const Employee = require('C:/Users/Admin/Downloads/HrsystemBackend/models/Employee');
-const hrService = require('C:/Users/Admin/Downloads/HrsystemBackend/services/hrService');
+const { app } = require('../server');
+const User = require('../models/User');
+const Employee = require('../models/Employee');
+const hrService = require('../services/hrService');
 
 function makeRequest(server, method, path, headers = {}, body = null) {
   return new Promise((resolve, reject) => {

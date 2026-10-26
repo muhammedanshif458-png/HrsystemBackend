@@ -66,6 +66,76 @@ const checkOutValidator = [
 ];
 
 /**
+ * Normalizes frontend break types ('Morning Break', 'Lunch Break', 'Afternoon Break', 'morning_break', etc.)
+ */
+const normalizeBreakType = (type) => {
+  if (!type || typeof type !== 'string') return null;
+  const t = type.trim().toLowerCase().replace(/[\-_]/g, ' ');
+  if (t === 'morning' || t === 'morning break') return 'Morning Break';
+  if (t === 'lunch' || t === 'lunch break') return 'Lunch Break';
+  if (t === 'afternoon' || t === 'afternoon break') return 'Afternoon Break';
+  return null;
+};
+
+const breakStartValidator = [
+  body('breakType').optional().trim(),
+  body('type').optional().trim(),
+  body('breakName').optional().trim(),
+  body('name').optional().trim(),
+  body('remarks')
+    .optional()
+    .trim()
+    .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
+  (req, res, next) => {
+    const rawType = req.body.breakType || req.body.type || req.body.breakName || req.body.name;
+    if (!rawType || !String(rawType).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'breakType is required. Allowed types: Morning Break, Lunch Break, Afternoon Break.'
+      });
+    }
+    const normalized = normalizeBreakType(rawType);
+    if (!normalized) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid break type. Allowed types: Morning Break, Lunch Break, Afternoon Break.'
+      });
+    }
+    req.body.canonicalBreakType = normalized;
+    req.body.breakType = normalized;
+    next();
+  },
+  validate
+];
+
+const breakEndValidator = [
+  body('breakType').optional().trim(),
+  body('type').optional().trim(),
+  body('breakName').optional().trim(),
+  body('name').optional().trim(),
+  body('remarks')
+    .optional()
+    .trim()
+    .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
+  (req, res, next) => {
+    const rawType = req.body.breakType || req.body.type || req.body.breakName || req.body.name;
+    if (rawType && String(rawType).trim()) {
+      const normalized = normalizeBreakType(rawType);
+      if (!normalized) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid break type. Allowed types: Morning Break, Lunch Break, Afternoon Break.'
+        });
+      }
+      req.body.canonicalBreakType = normalized;
+      req.body.breakType = normalized;
+    }
+    next();
+  },
+  validate
+];
+
+/**
  * Normalizes frontend leave types ('Casual Leave', 'Sick Leave', 'Earned Leave', 'Medical Leave', etc.)
  * to canonical uppercase enum values understood across backend models and services.
  */
@@ -225,6 +295,9 @@ const dailyUpdateIdParamValidator = [
 ];
 
 module.exports = {
+  normalizeBreakType,
+  breakStartValidator,
+  breakEndValidator,
   normalizeLeaveType,
   updateProfileValidator,
   checkInValidator,

@@ -214,12 +214,51 @@ const hrDailyUpdatesQueryValidator = [
   validate
 ];
 
+const departmentScheduleValidator = [
+  (req, res, next) => {
+    if (req.body && !req.body.department && req.params?.deptKey) {
+      req.body.department = req.params.deptKey;
+    }
+    next();
+  },
+  body('department')
+    .trim()
+    .notEmpty().withMessage('Department is required'),
+  body('checkInTime')
+    .trim()
+    .notEmpty().withMessage('Check-in time is required')
+    .matches(/^([01]\d|2[0-3]):([0-5]\d)$/).withMessage('Check-in time must be in HH:mm 24-hour format'),
+  body('checkOutTime')
+    .optional()
+    .trim()
+    .matches(/^([01]\d|2[0-3]):([0-5]\d)$/).withMessage('Check-out time must be in HH:mm 24-hour format'),
+  body('gracePeriodMinutes')
+    .optional()
+    .isInt({ min: 0 }).withMessage('Grace period must be a non-negative integer'),
+  body('timezone')
+    .optional()
+    .trim()
+    .custom((val) => {
+      try {
+        Intl.DateTimeFormat(undefined, { timeZone: val });
+        return true;
+      } catch (e) {
+        throw new Error('Invalid IANA timezone');
+      }
+    }),
+  body('effectiveDate')
+    .optional()
+    .isISO8601().withMessage('Effective date must be a valid ISO8601 date'),
+  validate
+];
+
 module.exports = {
   birthdaysValidator,
   createEmployeeValidator,
   updateEmployeeValidator,
   rejectLeaveValidator,
   mongoIdParamValidator,
-  hrDailyUpdatesQueryValidator
+  hrDailyUpdatesQueryValidator,
+  departmentScheduleValidator
 };
 

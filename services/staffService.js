@@ -2,7 +2,9 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
+const DepartmentSchedule = require('../models/DepartmentSchedule');
 const Leave = require('../models/Leave');
+const { calculateLateness } = require('../utils/scheduleHelper');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 const { getDateKey, getUtcDateForKey, classifyCheckIn, getScheduleForDepartment } = require('../utils/attendanceSchedule');
@@ -166,8 +168,9 @@ class StaffService {
     if (!(checkIn instanceof Date) || Number.isNaN(checkIn.getTime())) {
       throw new AppError('Invalid check-in timestamp', 400);
     }
+    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
     // Without a configured schedule, retain the legacy UTC workday and do not infer lateness.
-    const date = schedule ? getUtcDateForKey(getDateKey(checkIn, schedule.timeZone)) : getMidnightToday(checkIn);
+    const date = schedule ? getUtcDateForKey(getDateKey(checkIn, tz)) : getMidnightToday(checkIn);
     const dayEnd = new Date(date.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     // Check if attendance already recorded today
@@ -180,13 +183,41 @@ class StaffService {
       throw new AppError('You have already checked in for today', 400);
     }
 
+    const classification = classifyCheckIn(checkIn, schedule);
+    const isLate = Boolean(classification.late);
+    let minutesLate = 0;
+    let scheduleStatus = classification.scheduleConfigured ? 'CONFIGURED' : 'UNCONFIGURED';
+    let scheduleSnapshot = null;
+
+    if (schedule && classification.scheduleConfigured) {
+      const [hour, minute] = schedule.checkInTime.split(':').map(Number);
+      const { getLocalParts } = require('../utils/attendanceSchedule');
+      const local = getLocalParts(checkIn, tz);
+      const actualMinutes = Number(local.hour) * 60 + Number(local.minute);
+      const scheduledMinutes = hour * 60 + minute;
+      if (isLate) {
+        minutesLate = Math.max(0, actualMinutes - scheduledMinutes);
+      }
+      scheduleSnapshot = {
+        department: schedule.department,
+        scheduledCheckIn: schedule.checkInTime,
+        scheduledCheckOut: schedule.checkOutTime || '18:00',
+        gracePeriodMinutes: schedule.gracePeriodMinutes || 0,
+        timezone: tz
+      };
+    }
+
     const attendance = new Attendance({
       employee: employee._id,
       date,
       checkIn,
       workMode: employee.workMode || null,
       status: 'PRESENT',
-      ...classifyCheckIn(checkIn, schedule),
+      ...classification,
+      isLate,
+      minutesLate,
+      scheduleStatus,
+      scheduleSnapshot,
       remarks: remarks || ''
     });
 
@@ -220,19 +251,174 @@ class StaffService {
     const checkOutTime = new Date();
     attendance.checkOut = checkOutTime;
 
-    // Calculate working hours
+    // If a break is still active at check-out, automatically close it
+    if (attendance.activeBreak) {
+      const activeBreakId = attendance.activeBreak.breakId;
+      let targetBreak = activeBreakId ? attendance.breaks.id(activeBreakId) : null;
+      if (!targetBreak) {
+        targetBreak = attendance.breaks.find(b => !b.endTime);
+      }
+      if (targetBreak) {
+        targetBreak.endTime = checkOutTime;
+        const diffMs = Math.max(0, checkOutTime.getTime() - new Date(targetBreak.startTime).getTime());
+        targetBreak.durationMinutes = Math.max(1, Math.round(diffMs / 60000));
+      }
+      attendance.totalBreakMinutes = attendance.breaks.reduce((sum, b) => sum + (b.durationMinutes || 0), 0);
+      attendance.activeBreak = null;
+      attendance.breakStartedAt = null;
+    }
+
+    // Calculate working hours net of break time
     const diffMs = checkOutTime.getTime() - attendance.checkIn.getTime();
-    const hours = Math.max(0, diffMs / (1000 * 60 * 60));
+    const breakMs = (attendance.totalBreakMinutes || 0) * 60 * 1000;
+    const netWorkedMs = Math.max(0, diffMs - breakMs);
+    const hours = Math.max(0, netWorkedMs / (1000 * 60 * 60));
     attendance.workingHours = Math.round(hours * 100) / 100;
 
-    // Optional status update based on hours
-    if (attendance.workingHours < 4) {
+    // Optional status update based on hours (only if not late)
+    if (attendance.workingHours < 4 && !attendance.isLate && attendance.status !== 'LATE') {
       attendance.status = 'HALF_DAY';
     }
 
     if (remarks) {
       attendance.remarks = attendance.remarks ? `${attendance.remarks} | ${remarks}` : remarks;
     }
+
+    await attendance.save();
+    return attendance;
+  }
+
+  /**
+   * Start a staff break (Morning Break, Lunch Break, Afternoon Break)
+   */
+  async startBreak(user, body = {}) {
+    const employee = await this.getEmployeeOrThrow(user);
+
+    if (employee.status !== 'ACTIVE') {
+      throw new AppError(`Cannot start break. Employee status is currently: ${employee.status}`, 400);
+    }
+
+    const schedule = await getScheduleForDepartment(employee.department);
+    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const now = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    const attendance = await Attendance.findOne({
+      employee: employee._id,
+      date: { $gte: todayMidnight, $lte: todayEnd }
+    });
+
+    if (!attendance || !attendance.checkIn) {
+      throw new AppError('Cannot start break before checking in for today', 400);
+    }
+
+    if (attendance.checkOut) {
+      throw new AppError('Cannot start break after checking out for today', 400);
+    }
+
+    // Check if another break is currently active
+    if (attendance.activeBreak && attendance.activeBreak.breakType) {
+      throw new AppError(`Cannot start a new break while ${attendance.activeBreak.breakType} is currently active`, 400);
+    }
+
+    const rawType = body.canonicalBreakType || body.breakType || body.type || body.breakName || body.name;
+    const { normalizeBreakType } = require('../validators/staffValidator');
+    const breakType = normalizeBreakType(rawType);
+
+    if (!breakType) {
+      throw new AppError('Invalid break type. Allowed break types: Morning Break, Lunch Break, Afternoon Break.', 400);
+    }
+
+    // Prevent duplicate starts for the same break type today
+    const alreadyTaken = attendance.breaks.some(b => b.breakType === breakType);
+    if (alreadyTaken) {
+      throw new AppError(`${breakType} has already been taken today`, 400);
+    }
+
+    const breakItem = {
+      breakType,
+      startTime: now,
+      endTime: null,
+      durationMinutes: 0,
+      remarks: (body.remarks || '').trim()
+    };
+
+    attendance.breaks.push(breakItem);
+    const addedBreak = attendance.breaks[attendance.breaks.length - 1];
+
+    attendance.activeBreak = {
+      breakType,
+      startTime: now,
+      breakId: addedBreak._id
+    };
+    attendance.breakStartedAt = now;
+
+    await attendance.save();
+    return attendance;
+  }
+
+  /**
+   * End the active staff break
+   */
+  async endBreak(user, body = {}) {
+    const employee = await this.getEmployeeOrThrow(user);
+
+    const schedule = await getScheduleForDepartment(employee.department);
+    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const now = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    const attendance = await Attendance.findOne({
+      employee: employee._id,
+      date: { $gte: todayMidnight, $lte: todayEnd }
+    });
+
+    if (!attendance || !attendance.checkIn) {
+      throw new AppError('Cannot end break before checking in for today', 400);
+    }
+
+    if (attendance.checkOut) {
+      throw new AppError('Cannot end break after checking out for today', 400);
+    }
+
+    if (!attendance.activeBreak || !attendance.activeBreak.breakType) {
+      throw new AppError('No active break found to end', 400);
+    }
+
+    const rawType = body.canonicalBreakType || body.breakType || body.type || body.breakName || body.name;
+    if (rawType) {
+      const { normalizeBreakType } = require('../validators/staffValidator');
+      const requestedBreakType = normalizeBreakType(rawType);
+      if (requestedBreakType && requestedBreakType !== attendance.activeBreak.breakType) {
+        throw new AppError(`Active break is ${attendance.activeBreak.breakType}, but requested to end ${requestedBreakType}`, 400);
+      }
+    }
+
+    const activeBreakId = attendance.activeBreak.breakId;
+    let targetBreak = activeBreakId ? attendance.breaks.id(activeBreakId) : null;
+    if (!targetBreak) {
+      targetBreak = attendance.breaks.find(b => b.breakType === attendance.activeBreak.breakType && !b.endTime);
+    }
+
+    if (!targetBreak) {
+      throw new AppError('Could not find active break record to end', 400);
+    }
+
+    targetBreak.endTime = now;
+    const diffMs = Math.max(0, now.getTime() - new Date(targetBreak.startTime).getTime());
+    targetBreak.durationMinutes = Math.max(1, Math.round(diffMs / 60000));
+
+    if (body.remarks && body.remarks.trim()) {
+      targetBreak.remarks = targetBreak.remarks
+        ? `${targetBreak.remarks} | ${body.remarks.trim()}`
+        : body.remarks.trim();
+    }
+
+    attendance.totalBreakMinutes = attendance.breaks.reduce((sum, b) => sum + (b.durationMinutes || 0), 0);
+    attendance.activeBreak = null;
+    attendance.breakStartedAt = null;
 
     await attendance.save();
     return attendance;
@@ -260,7 +446,7 @@ class StaffService {
       }
     }
 
-    const [attendance, total] = await Promise.all([
+    const [rawAttendance, total] = await Promise.all([
       Attendance.find(filter)
         .sort({ date: -1, checkIn: -1 })
         .skip(skip)
@@ -268,6 +454,55 @@ class StaffService {
         .lean(),
       Attendance.countDocuments(filter)
     ]);
+
+    const formatBreakDurationStr = (mins = 0) => {
+      const m = Number(mins) || 0;
+      if (!m) return '0m';
+      const hours = Math.floor(m / 60);
+      const rem = m % 60;
+      if (hours > 0 && rem > 0) return `${hours}h ${rem}m`;
+      if (hours > 0) return `${hours}h`;
+      return `${rem}m`;
+    };
+
+    const attendance = rawAttendance.map(rec => {
+      const isLateRec = Boolean(rec.isLate || rec.status === 'LATE');
+      const snapshot = rec.scheduleSnapshot || null;
+      const workingHoursNum = Number(rec.workingHours) || 0;
+      const workedHoursInt = Math.floor(workingHoursNum);
+      const workedMinsInt = Math.round((workingHoursNum - workedHoursInt) * 60);
+      const workedDuration = workingHoursNum > 0
+        ? (workedMinsInt > 0 ? `${workedHoursInt}h ${workedMinsInt}m` : `${workedHoursInt}h`)
+        : '0h';
+
+      const totalBreakMins = Number(rec.totalBreakMinutes) || (Array.isArray(rec.breaks) ? rec.breaks.reduce((s, b) => s + (b.durationMinutes || 0), 0) : 0);
+
+      return {
+        ...rec,
+        id: rec._id ? rec._id.toString() : '',
+        staffId: employee._id ? employee._id.toString() : '',
+        employeeId: employee.employeeId || '',
+        checkInTime: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
+        checkOutTime: rec.checkOut ? new Date(rec.checkOut).toISOString() : null,
+        checkInAt: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
+        workedDuration,
+        breakDuration: formatBreakDurationStr(totalBreakMins),
+        totalBreakMinutes: totalBreakMins,
+        breaks: rec.breaks || [],
+        activeBreak: rec.activeBreak || null,
+        breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (rec.activeBreak?.startTime ? new Date(rec.activeBreak.startTime).toISOString() : null),
+        department: employee.department || snapshot?.department || null,
+        isLate: isLateRec,
+        late: isLateRec,
+        minutesLate: rec.minutesLate || 0,
+        scheduledCheckIn: snapshot?.scheduledCheckIn || null,
+        scheduledCheckOut: snapshot?.scheduledCheckOut || null,
+        scheduleTimeZone: snapshot?.timezone || null,
+        timezone: snapshot?.timezone || null,
+        gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0,
+        scheduleSnapshot: snapshot
+      };
+    });
 
     const totalPages = Math.ceil(total / limit) || 1;
 

@@ -167,9 +167,23 @@ const employeeSchema = new mongoose.Schema(
     }
   },
   {
-    timestamps: true
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
   }
 );
+
+employeeSchema.virtual('name').get(function() {
+  return `${this.firstName || ''} ${this.lastName || ''}`.trim();
+});
+
+employeeSchema.virtual('phoneNumber').get(function() {
+  return this.phone || '';
+});
+
+employeeSchema.virtual('role').get(function() {
+  return this.designation || (this.user?.role === 'HR' ? 'HR' : 'Staff');
+});
 
 // Indexes for faster lookups and search
 employeeSchema.index({ department: 1 });

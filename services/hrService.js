@@ -5,6 +5,7 @@ const Attendance = require('../models/Attendance');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
 const { isAttendanceForCurrentWorkday, getDateKey, getDayBoundsForKey } = require('../utils/attendanceSchedule');
 const Leave = require('../models/Leave');
+const { calculateLateness } = require('../utils/scheduleHelper');
 const { summarizeAttendanceDay } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
@@ -15,165 +16,228 @@ class HRService {
   /**
    * Get HR Dashboard statistics
    */
-  async getDashboardStats(dateKey = null) {
-    const { startOfDay, endOfDay } = getDayBounds(dateKey);
-    const [totalEmployees, activeEmployees, inactiveEmployees, active, todayRows, approvedTodayLeaves, pendingLeaves, approvedLeaves] = await Promise.all([
-      Employee.countDocuments(),
-      Employee.countDocuments({ status: 'ACTIVE' }),
-      Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
-      Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
-      Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } }).select('employee status late checkIn workMode createdAt').populate('employee', 'status workMode').sort({ checkIn: -1, createdAt: -1 }).lean(),
-      Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
-      Leave.countDocuments({ status: 'PENDING' }),
-      Leave.countDocuments({ status: 'APPROVED' })
-    ]);
-    const metrics = summarizeAttendanceDay({
-      activeEmployeeIds: active.map(employee => employee._id),
-      attendanceRows: todayRows,
-      approvedLeaveRows: approvedTodayLeaves,
-      dateKey: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
-    });
-    return {
+  async getDashboardStats() {
+    const { startOfDay, endOfDay } = getDayBounds();
+
+    const [
+      totalEmployees,
+      activeEmployees,
+      inactiveEmployees,
+      todayAttendanceCounts,
+      lateArrivals,
+      todayLateCount,
+      pendingLeaves,
+      approvedLeaves
+    ] = await Promise.all([
+      async getDashboardStats(dateKey = null) {
+        const { startOfDay, endOfDay } = getDayBounds(dateKey);
+        const [totalEmployees, activeEmployees, inactiveEmployees, active, todayRows, approvedTodayLeaves, pendingLeaves, approvedLeaves] = await Promise.all([
+          Employee.countDocuments(),
+          Employee.countDocuments({ status: 'ACTIVE' }),
+          Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
+          Attendance.aggregate([
+            {
+              $match: {
+                date: { $gte: startOfDay, $lte: endOfDay }
+              }
+            },
+            {
+              $group: {
+                _id: '$status',
+                count: { $sum: 1 }
+              }
+            }
+          ]),
+          Attendance.find({ checkIn: { $ne: null }, late: true })
+            .select('date checkIn scheduleTimeZone').lean(),
+          Attendance.countDocuments({
+            date: { $gte: startOfDay, $lte: endOfDay },
+            $or: [{ status: 'LATE' }, { isLate: true }]
+          }),
+          Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
+          Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } }).select('employee status late checkIn workMode createdAt').populate('employee', 'status workMode').sort({ checkIn: -1, createdAt: -1 }).lean(),
+          Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
+          Leave.countDocuments({ status: 'PENDING' }),
+          Leave.countDocuments({ status: 'APPROVED' })
+        ]);
+
+        let todayPresent = 0;
+        let todayAbsent = 0;
+
+        todayAttendanceCounts.forEach((group) => {
+          if (group._id === 'PRESENT' || group._id === 'HALF_DAY' || group._id === 'LATE') {
+            todayPresent += group.count;
+          } else if (group._id === 'ABSENT') {
+            todayAbsent += group.count;
+          }
+        });
+
+        const lateRecords = lateArrivals.filter(record => isAttendanceForCurrentWorkday(record));
+
+        const metrics = summarizeAttendanceDay({
+          activeEmployeeIds: active.map(employee => employee._id),
+          attendanceRows: todayRows,
+          approvedLeaveRows: approvedTodayLeaves,
+          dateKey: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
+        });
+        return {
+          totalEmployees,
+          activeEmployees,
+          inactiveEmployees,
+          todayPresent,
+          todayLate: lateRecords.length,
+          todayAbsent,
+          lateArrivals: lateRecords.length,
+          pendingLeaves,
+          approvedLeaves
       totalEmployees, activeEmployees, inactiveEmployees, ...metrics,
-      pendingLeaves, approvedLeaves
-    };
-  }
+          pendingLeaves, approvedLeaves
+        };
+      }
 
   /**
    * Get list of employees with search, filter, and pagination
    */
   async getEmployees({ page = 1, limit = 20, search = '', department, designation, status, employmentType }) {
-    page = Math.max(1, parseInt(page, 10));
-    limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
-    const skip = (page - 1) * limit;
+        page = Math.max(1, parseInt(page, 10));
+        limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+        const skip = (page - 1) * limit;
 
-    const filter = {};
+        const filter = {};
 
-    if (search && search.trim() !== '') {
-      const regex = new RegExp(search.trim(), 'i');
-      filter.$or = [
-        { firstName: regex },
-        { lastName: regex },
-        { email: regex },
-        { employeeId: regex },
-        { department: regex },
-        { designation: regex }
-      ];
-    }
+        if(search && search.trim() !== '') {
+          const regex = new RegExp(search.trim(), 'i');
+    filter.$or = [
+      { firstName: regex },
+      { lastName: regex },
+      { email: regex },
+      { employeeId: regex },
+      { department: regex },
+      { designation: regex }
+    ];
+  }
 
-    if (department) filter.department = new RegExp(`^${department.trim()}$`, 'i');
-    if (designation) filter.designation = new RegExp(`^${designation.trim()}$`, 'i');
-    if (status) filter.status = status;
-    if (employmentType) filter.employmentType = employmentType;
+  if(department) filter.department = new RegExp(`^${department.trim()}$`, 'i');
+  if(designation) filter.designation = new RegExp(`^${designation.trim()}$`, 'i');
+  if(status) filter.status = status;
+  if(employmentType) filter.employmentType = employmentType;
 
-    const [employees, total] = await Promise.all([
-      Employee.find(filter)
-        .populate('user', 'role isActive lastLogin')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Employee.countDocuments(filter)
-    ]);
+  const[employees, total] = await Promise.all([
+    Employee.find(filter)
+      .populate('user', 'role isActive lastLogin')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Employee.countDocuments(filter)
+  ]);
 
-    const totalPages = Math.ceil(total / limit) || 1;
+const totalPages = Math.ceil(total / limit) || 1;
 
-    return {
-      employees,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages
-      }
-    };
+const enrichedEmployees = employees.map(emp => ({
+  ...emp,
+  id: emp._id ? emp._id.toString() : '',
+  name: `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
+  phoneNumber: emp.phone || '',
+  role: emp.designation || (emp.user?.role === 'HR' ? 'HR' : 'Staff')
+}));
+
+return {
+  employees: enrichedEmployees,
+  pagination: {
+    page,
+    limit,
+    total,
+    totalPages
+  }
+};
   }
 
   /**
    * Create new employee and corresponding User account
    */
   async createEmployee(data, currentUser = null) {
-    // Support both 'name' (full name from Flutter) and firstName/lastName separately
-    if (!data.firstName && data.name) {
-      const parts = data.name.trim().split(' ');
-      data.firstName = parts[0];
-      data.lastName = parts.slice(1).join(' ') || parts[0];
-    }
-    if (!data.lastName) data.lastName = data.firstName;
-    // Support 'phoneNumber' field from Flutter in addition to 'phone'
-    if (!data.phone && data.phoneNumber) data.phone = data.phoneNumber;
+  // Support both 'name' (full name from Flutter) and firstName/lastName separately
+  if (!data.firstName && data.name) {
+    const parts = data.name.trim().split(' ');
+    data.firstName = parts[0];
+    data.lastName = parts.slice(1).join(' ') || parts[0];
+  }
+  if (!data.lastName) data.lastName = data.firstName;
+  // Support 'phoneNumber' field from Flutter in addition to 'phone'
+  if (!data.phone && data.phoneNumber) data.phone = data.phoneNumber;
 
-    const {
-      firstName,
-      lastName,
-      email,
-      phone,
-      password,
-      department,
-      designation,
-      employmentType = 'FULL_TIME',
-      workMode = 'Office',
-      salary = 0,
-      salaryCurrency = 'INR',
-      salaryEffectiveDate = '',
-      paidLeaveAllowance = 1,
-      dateOfBirth,
-      gender,
-      address,
-      city,
-      state,
-      country,
-      profileImage,
-      emergencyContact,
-      status = 'ACTIVE'
-    } = data;
+  const {
+    firstName,
+    lastName,
+    email,
+    phone,
+    password,
+    department,
+    designation,
+    employmentType = 'FULL_TIME',
+    workMode = 'Office',
+    salary = 0,
+    salaryCurrency = 'INR',
+    salaryEffectiveDate = '',
+    paidLeaveAllowance = 1,
+    dateOfBirth,
+    gender,
+    address,
+    city,
+    state,
+    country,
+    profileImage,
+    emergencyContact,
+    status = 'ACTIVE'
+  } = data;
 
-    const normalizedEmail = String(email || '').trim().toLowerCase();
-    if (!normalizedEmail) {
-      throw new AppError('Email is required', 400);
-    }
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new AppError('Email is required', 400);
+  }
 
-    // Check if user or employee with email already exists
-    const existingUser = await User.findOne({ email: normalizedEmail });
-    const existingEmployee = await Employee.findOne({ email: normalizedEmail });
-    if (existingEmployee) {
-      throw new AppError('An employee with this email address already exists', 409);
-    }
+  // Check if user or employee with email already exists
+  const existingUser = await User.findOne({ email: normalizedEmail });
+  const existingEmployee = await Employee.findOne({ email: normalizedEmail });
+  if (existingEmployee) {
+    throw new AppError('An employee with this email address already exists', 409);
+  }
 
-    // Auto-generate employeeId if not provided
-    let employeeId = data.employeeId ? data.employeeId.toUpperCase().trim() : null;
-    if (!employeeId) {
-      const count = await Employee.countDocuments();
-      employeeId = `EMP${String(count + 1001).padStart(4, '0')}`;
-    }
+  // Auto-generate employeeId if not provided
+  let employeeId = data.employeeId ? data.employeeId.toUpperCase().trim() : null;
+  if (!employeeId) {
+    const count = await Employee.countDocuments();
+    employeeId = `EMP${String(count + 1001).padStart(4, '0')}`;
+  }
 
-    const existingEmpId = await Employee.findOne({ employeeId });
-    if (existingEmpId) {
-      throw new AppError(`Employee ID '${employeeId}' is already in use`, 409);
-    }
+  const existingEmpId = await Employee.findOne({ employeeId });
+  if (existingEmpId) {
+    throw new AppError(`Employee ID '${employeeId}' is already in use`, 409);
+  }
 
-    const finalPassword = (password && String(password).trim().length >= 6)
-      ? String(password).trim()
-      : 'Password@123';
+  const finalPassword = (password && String(password).trim().length >= 6)
+    ? String(password).trim()
+    : 'Password@123';
 
-    let newUser;
-    try {
-      if (existingUser) {
-        const linkedEmp = await Employee.findOne({ user: existingUser._id });
-        if (linkedEmp) {
-          throw new AppError('An account with this email address already exists', 409);
-        }
-        newUser = existingUser;
-        newUser.firstName = firstName;
-        newUser.lastName = lastName;
-        newUser.phone = phone || '';
-        newUser.role = 'STAFF';
-        newUser.isActive = status === 'ACTIVE';
-        if (password && String(password).trim().length >= 6) {
-          newUser.password = String(password).trim();
-        }
-        await newUser.save();
-      } else {
+  let newUser;
+  try {
+    if (existingUser) {
+      const linkedEmp = await Employee.findOne({ user: existingUser._id });
+      if (linkedEmp) {
+        throw new AppError('An account with this email address already exists', 409);
+      }
+      newUser = existingUser;
+      newUser.firstName = firstName;
+      newUser.lastName = lastName;
+      newUser.phone = phone || '';
+      newUser.role = 'STAFF';
+      newUser.isActive = status === 'ACTIVE';
+      if (password && String(password).trim().length >= 6) {
+        newUser.password = String(password).trim();
+      }
+      await newUser.save();
+    } else {
       // Create user with STAFF role
       newUser = new User({
         firstName,
@@ -187,368 +251,393 @@ class HRService {
       });
 
       await newUser.save();
-      }
-
-      // Create employee profile linked to user
-      const newEmployee = new Employee({
-        employeeId,
-        user: newUser._id,
-        firstName,
-        lastName,
-        email: normalizedEmail,
-        phone: phone || '',
-        dateOfBirth: (dateOfBirth && dateOfBirth !== '') ? new Date(dateOfBirth) : null,
-        gender: gender || 'OTHER',
-        department,
-        designation,
-        joiningDate: data.joiningDate || new Date(),
-        employmentType,
-        salary,
-        salaryCurrency: salaryCurrency || 'INR',
-        salaryEffectiveDate: salaryEffectiveDate || new Date().toISOString().substring(0, 10),
-        paidLeaveAllowance: paidLeaveAllowance || 1,
-        salaryHistory: salary > 0 ? [{
-          amount: salary,
-          currency: salaryCurrency || 'INR',
-          effectiveDate: salaryEffectiveDate || new Date().toISOString().substring(0, 10),
-          changedBy: currentUser ? `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim() || 'HR Admin' : 'HR Admin',
-          reason: 'Initial Salary on joining',
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
-        }] : [],
-        address: address || '',
-        city: city || '',
-        state: state || '',
-        country: country || '',
-        profileImage: profileImage || null,
-        emergencyContact: emergencyContact || { name: '', relationship: '', phone: '' },
-        status
-      });
-
-      await newEmployee.save();
-
-      const populatedEmployee = await Employee.findById(newEmployee._id).populate('user', 'role isActive');
-      return populatedEmployee;
-    } catch (err) {
-      if (newUser && newUser._id) {
-        try {
-          await User.findByIdAndDelete(newUser._id);
-        } catch (_) {}
-      }
-      throw err;
     }
+
+    // Create employee profile linked to user
+    const newEmployee = new Employee({
+      employeeId,
+      user: newUser._id,
+      firstName,
+      lastName,
+      email: normalizedEmail,
+      phone: phone || '',
+      dateOfBirth: (dateOfBirth && dateOfBirth !== '') ? new Date(dateOfBirth) : null,
+      gender: gender || 'OTHER',
+      department,
+      designation,
+      joiningDate: data.joiningDate || new Date(),
+      employmentType,
+      salary,
+      salaryCurrency: salaryCurrency || 'INR',
+      salaryEffectiveDate: salaryEffectiveDate || new Date().toISOString().substring(0, 10),
+      paidLeaveAllowance: paidLeaveAllowance || 1,
+      salaryHistory: salary > 0 ? [{
+        amount: salary,
+        currency: salaryCurrency || 'INR',
+        effectiveDate: salaryEffectiveDate || new Date().toISOString().substring(0, 10),
+        changedBy: currentUser ? `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim() || 'HR Admin' : 'HR Admin',
+        reason: 'Initial Salary on joining',
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+      }] : [],
+      address: address || '',
+      city: city || '',
+      state: state || '',
+      country: country || '',
+      profileImage: profileImage || null,
+      emergencyContact: emergencyContact || { name: '', relationship: '', phone: '' },
+      status
+    });
+
+    await newEmployee.save();
+
+    const populatedEmployee = await Employee.findById(newEmployee._id).populate('user', 'role isActive');
+    return populatedEmployee;
+  } catch (err) {
+    if (newUser && newUser._id) {
+      try {
+        await User.findByIdAndDelete(newUser._id);
+      } catch (_) { }
+    }
+    throw err;
   }
+}
 
   /**
    * Get employee by ID
    */
-  
-  async getEmployeeById(id) {
-    let query = {};
-    if (mongoose.Types.ObjectId.isValid(id)) {
-      query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }, { user: id }] };
-    } else {
-      query = { employeeId: id.toUpperCase() };
-    }
 
-    const employee = await Employee.findOne(query).populate('user', 'role isActive lastLogin');
-    if (!employee) {
-      throw new AppError('Employee not found', 404);
-    }
-    return employee;
+  async getEmployeeById(id) {
+  let query = {};
+  if (mongoose.Types.ObjectId.isValid(id)) {
+    query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }, { user: id }] };
+  } else {
+    query = { employeeId: id.toUpperCase() };
   }
+
+  const employee = await Employee.findOne(query).populate('user', 'role isActive lastLogin');
+  if (!employee) {
+    throw new AppError('Employee not found', 404);
+  }
+  return employee;
+}
 
   /**
    * Update employee and synchronize User account
    */
   async updateEmployee(id, updateData, currentUser = null) {
-    let query = {};
-    if (mongoose.Types.ObjectId.isValid(id)) {
-      query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }, { user: id }] };
-    } else {
-      query = { employeeId: id.toUpperCase() };
-    }
+  let query = {};
+  if (mongoose.Types.ObjectId.isValid(id)) {
+    query = { $or: [{ _id: id }, { employeeId: id.toUpperCase() }, { user: id }] };
+  } else {
+    query = { employeeId: id.toUpperCase() };
+  }
 
-    const employee = await Employee.findOne(query);
-    if (!employee) {
-      throw new AppError('Employee not found', 404);
-    }
+  const employee = await Employee.findOne(query);
+  if (!employee) {
+    throw new AppError('Employee not found', 404);
+  }
 
-    // Support name/fullName (split into firstName and lastName)
-    const rawName = (updateData.name || updateData.fullName || '').trim();
-    if (rawName) {
-      const parts = rawName.split(/\s+/);
-      updateData.firstName = parts[0];
-      updateData.lastName = parts.slice(1).join(' ') || parts[0];
-    } else if (updateData.firstName && updateData.lastName === undefined) {
-      // If only firstName is provided, preserve existing lastName or fallback
-      if (!employee.lastName) {
-        updateData.lastName = updateData.firstName;
-      }
-    } else if (updateData.firstName && updateData.lastName !== undefined && !String(updateData.lastName).trim()) {
+  // Support name/fullName (split into firstName and lastName)
+  const rawName = (updateData.name || updateData.fullName || '').trim();
+  if (rawName) {
+    const parts = rawName.split(/\s+/);
+    updateData.firstName = parts[0];
+    updateData.lastName = parts.slice(1).join(' ') || parts[0];
+  } else if (updateData.firstName && updateData.lastName === undefined) {
+    // If only firstName is provided, preserve existing lastName or fallback
+    if (!employee.lastName) {
       updateData.lastName = updateData.firstName;
     }
-
-    // Support phoneNumber field from Flutter in addition to phone
-    if (!updateData.phone && updateData.phoneNumber !== undefined) {
-      updateData.phone = updateData.phoneNumber;
-    }
-
-    // Check if new email is in use by another user or employee
-    let normalizedEmail = null;
-    if (updateData.email) {
-      normalizedEmail = updateData.email.toLowerCase().trim();
-      if (normalizedEmail !== employee.email) {
-        const existingUser = await User.findOne({
-          email: normalizedEmail,
-          _id: { $ne: employee.user }
-        });
-        if (existingUser) {
-          throw new AppError('Email address is already in use by another account', 409);
-        }
-        const existingEmp = await Employee.findOne({
-          email: normalizedEmail,
-          _id: { $ne: employee._id }
-        });
-        if (existingEmp) {
-          throw new AppError('Email address is already in use by another employee', 409);
-        }
-      } else {
-        normalizedEmail = employee.email;
-      }
-    }
-
-    // Handle password credential update (Super Admin authorization check)
-    let passwordToUpdate = null;
-    if (updateData.password !== undefined && updateData.password !== null) {
-      const trimmedPwd = String(updateData.password).trim();
-      if (trimmedPwd.length > 0) {
-        // Enforce Super Admin authorization
-        const role = currentUser?.role ? String(currentUser.role).toUpperCase() : '';
-        if (role !== 'SUPER_ADMIN' && role !== 'SUPERADMIN') {
-          throw new AppError('Only Super Admin is authorized to change employee credentials', 403);
-        }
-        if (trimmedPwd.length < 6) {
-          throw new AppError('Password must be at least 6 characters long', 400);
-        }
-        passwordToUpdate = trimmedPwd;
-      }
-    }
-
-    // Synchronize linked User account
-    const userId = (employee.user && employee.user._id) ? employee.user._id : employee.user;
-    let user = null;
-    if (userId) {
-      user = await User.findById(userId);
-    }
-    if (!user && employee.email) {
-      user = await User.findOne({ email: employee.email.toLowerCase().trim() });
-      if (user) {
-        employee.user = user._id;
-      }
-    }
-    if (!user && normalizedEmail) {
-      user = await User.findOne({ email: normalizedEmail });
-      if (user) {
-        employee.user = user._id;
-      }
-    }
-
-    if (!user) {
-      if (passwordToUpdate) {
-        user = new User({
-          firstName: updateData.firstName || employee.firstName,
-          lastName: updateData.lastName || employee.lastName,
-          email: normalizedEmail || employee.email,
-          phone: updateData.phone || employee.phone || '',
-          password: passwordToUpdate,
-          role: 'STAFF',
-          profileImage: updateData.profileImage || employee.profileImage || null,
-          isActive: employee.status === 'ACTIVE'
-        });
-        await user.save();
-        employee.user = user._id;
-      } else {
-        throw new AppError('Linked user login account not found for this employee', 404);
-      }
-    }
-
-    if (updateData.firstName) user.firstName = updateData.firstName;
-    if (updateData.lastName) user.lastName = updateData.lastName;
-    if (normalizedEmail && normalizedEmail !== user.email) {
-      user.email = normalizedEmail;
-    }
-    if (updateData.phone !== undefined) user.phone = updateData.phone;
-    if (updateData.profileImage !== undefined) user.profileImage = updateData.profileImage;
-    if (updateData.status) {
-      user.isActive = updateData.status === 'ACTIVE';
-    }
-    if (passwordToUpdate) {
-      user.password = passwordToUpdate; // triggers pre('save') bcrypt hashing
-      user.refreshToken = null; // Invalidate current session tokens
-    }
-    await user.save();
-
-    // Update Employee document fields
-    if (normalizedEmail) {
-      employee.email = normalizedEmail;
-    }
-    if (updateData.dateOfBirth !== undefined) {
-      employee.dateOfBirth = (updateData.dateOfBirth && updateData.dateOfBirth !== '') ? new Date(updateData.dateOfBirth) : null;
-    }
-    Object.keys(updateData).forEach((key) => {
-      if (
-        key !== 'user' &&
-        key !== '_id' &&
-        key !== 'password' &&
-        key !== 'email' &&
-        key !== 'dateOfBirth' &&
-        key !== 'name' &&
-        key !== 'fullName' &&
-        key !== 'phoneNumber' &&
-        updateData[key] !== undefined
-      ) {
-        employee[key] = updateData[key];
-      }
-    });
-
-    await employee.save();
-
-    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+  } else if (updateData.firstName && updateData.lastName !== undefined && !String(updateData.lastName).trim()) {
+    updateData.lastName = updateData.firstName;
   }
+
+  // Support phoneNumber field from Flutter in addition to phone
+  if (!updateData.phone && updateData.phoneNumber !== undefined) {
+    updateData.phone = updateData.phoneNumber;
+  }
+
+  // Check if new email is in use by another user or employee
+  let normalizedEmail = null;
+  if (updateData.email) {
+    normalizedEmail = updateData.email.toLowerCase().trim();
+    if (normalizedEmail !== employee.email) {
+      const existingUser = await User.findOne({
+        email: normalizedEmail,
+        _id: { $ne: employee.user }
+      });
+      if (existingUser) {
+        throw new AppError('Email address is already in use by another account', 409);
+      }
+      const existingEmp = await Employee.findOne({
+        email: normalizedEmail,
+        _id: { $ne: employee._id }
+      });
+      if (existingEmp) {
+        throw new AppError('Email address is already in use by another employee', 409);
+      }
+    } else {
+      normalizedEmail = employee.email;
+    }
+  }
+
+  // Handle password credential update (Super Admin authorization check)
+  let passwordToUpdate = null;
+  if (updateData.password !== undefined && updateData.password !== null) {
+    const trimmedPwd = String(updateData.password).trim();
+    if (trimmedPwd.length > 0) {
+      // Enforce Super Admin authorization
+      const role = currentUser?.role ? String(currentUser.role).toUpperCase() : '';
+      if (role !== 'SUPER_ADMIN' && role !== 'SUPERADMIN') {
+        throw new AppError('Only Super Admin is authorized to change employee credentials', 403);
+      }
+      if (trimmedPwd.length < 6) {
+        throw new AppError('Password must be at least 6 characters long', 400);
+      }
+      passwordToUpdate = trimmedPwd;
+    }
+  }
+
+  // Synchronize linked User account
+  const userId = (employee.user && employee.user._id) ? employee.user._id : employee.user;
+  let user = null;
+  if (userId) {
+    user = await User.findById(userId);
+  }
+  if (!user && employee.email) {
+    user = await User.findOne({ email: employee.email.toLowerCase().trim() });
+    if (user) {
+      employee.user = user._id;
+    }
+  }
+  if (!user && normalizedEmail) {
+    user = await User.findOne({ email: normalizedEmail });
+    if (user) {
+      employee.user = user._id;
+    }
+  }
+
+  if (!user) {
+    if (passwordToUpdate) {
+      user = new User({
+        firstName: updateData.firstName || employee.firstName,
+        lastName: updateData.lastName || employee.lastName,
+        email: normalizedEmail || employee.email,
+        phone: updateData.phone || employee.phone || '',
+        password: passwordToUpdate,
+        role: 'STAFF',
+        profileImage: updateData.profileImage || employee.profileImage || null,
+        isActive: employee.status === 'ACTIVE'
+      });
+      await user.save();
+      employee.user = user._id;
+    } else {
+      throw new AppError('Linked user login account not found for this employee', 404);
+    }
+  }
+
+  if (updateData.firstName) user.firstName = updateData.firstName;
+  if (updateData.lastName) user.lastName = updateData.lastName;
+  if (normalizedEmail && normalizedEmail !== user.email) {
+    user.email = normalizedEmail;
+  }
+  if (updateData.phone !== undefined) user.phone = updateData.phone;
+  if (updateData.profileImage !== undefined) user.profileImage = updateData.profileImage;
+  if (updateData.status) {
+    user.isActive = updateData.status === 'ACTIVE';
+  }
+  if (passwordToUpdate) {
+    user.password = passwordToUpdate; // triggers pre('save') bcrypt hashing
+    user.refreshToken = null; // Invalidate current session tokens
+  }
+  await user.save();
+
+  // Update Employee document fields
+  if (normalizedEmail) {
+    employee.email = normalizedEmail;
+  }
+  if (updateData.dateOfBirth !== undefined) {
+    employee.dateOfBirth = (updateData.dateOfBirth && updateData.dateOfBirth !== '') ? new Date(updateData.dateOfBirth) : null;
+  }
+  Object.keys(updateData).forEach((key) => {
+    if (
+      key !== 'user' &&
+      key !== '_id' &&
+      key !== 'password' &&
+      key !== 'email' &&
+      key !== 'dateOfBirth' &&
+      key !== 'name' &&
+      key !== 'fullName' &&
+      key !== 'phoneNumber' &&
+      updateData[key] !== undefined
+    ) {
+      employee[key] = updateData[key];
+    }
+  });
+
+  await employee.save();
+
+  return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+}
 
   /**
    * Delete or deactivate employee
    */
-  
+
   async deleteEmployee(id) {
-    const employee = await this.getEmployeeById(id);
+  const employee = await this.getEmployeeById(id);
 
-    employee.status = 'INACTIVE';
-    await employee.save();
+  employee.status = 'INACTIVE';
+  await employee.save();
 
-    // Deactivate linked User account
-    await User.findByIdAndUpdate(employee.user, { isActive: false });
+  // Deactivate linked User account
+  await User.findByIdAndUpdate(employee.user, { isActive: false });
 
-    return { message: 'Employee deactivated successfully' };
-  }
+  return { message: 'Employee deactivated successfully' };
+}
   /**
    * Update employee salary with history tracking
    */
   async updateSalary(id, salaryData) {
-    const employee = await this.getEmployeeById(id);
-    const {
-      salary,
-      salaryCurrency = 'INR',
-      salaryEffectiveDate = '',
-      changedBy = 'HR Admin',
-      reason = 'Salary Adjustment'
-    } = salaryData;
+  const employee = await this.getEmployeeById(id);
+  const {
+    salary,
+    salaryCurrency = 'INR',
+    salaryEffectiveDate = '',
+    changedBy = 'HR Admin',
+    reason = 'Salary Adjustment'
+  } = salaryData;
 
-    if (salary === undefined || salary === null) {
-      throw new AppError('New salary amount is required', 400);
-    }
-    if (salary < 0) {
-      throw new AppError('Salary cannot be negative', 400);
-    }
-
-    const effectiveDateStr = salaryEffectiveDate || new Date().toISOString().substring(0, 10);
-    const historyEntry = {
-      amount: salary,
-      currency: salaryCurrency,
-      effectiveDate: effectiveDateStr,
-      changedBy,
-      reason,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
-    };
-
-    employee.salary = salary;
-    employee.salaryCurrency = salaryCurrency;
-    employee.salaryEffectiveDate = effectiveDateStr;
-    employee.salaryHistory = [historyEntry, ...(employee.salaryHistory || [])];
-
-    await employee.save();
-    return await Employee.findById(employee._id).populate('user', 'role isActive');
+  if (salary === undefined || salary === null) {
+    throw new AppError('New salary amount is required', 400);
   }
+  if (salary < 0) {
+    throw new AppError('Salary cannot be negative', 400);
+  }
+
+  const effectiveDateStr = salaryEffectiveDate || new Date().toISOString().substring(0, 10);
+  const historyEntry = {
+    amount: salary,
+    currency: salaryCurrency,
+    effectiveDate: effectiveDateStr,
+    changedBy,
+    reason,
+    timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+  };
+
+  employee.salary = salary;
+  employee.salaryCurrency = salaryCurrency;
+  employee.salaryEffectiveDate = effectiveDateStr;
+  employee.salaryHistory = [historyEntry, ...(employee.salaryHistory || [])];
+
+  await employee.save();
+  return await Employee.findById(employee._id).populate('user', 'role isActive');
+}
 
 
   /**
    * Get attendance records for HR
    */
   async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status, department, search, workMode }) {
-    page = Math.max(1, parseInt(page, 10));
-    limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
-    const skip = (page - 1) * limit;
+  page = Math.max(1, parseInt(page, 10));
+  limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+  const skip = (page - 1) * limit;
 
-    const filter = {};
+  const filter = {};
 
-    if (employeeId) {
-      let emp;
-      if (mongoose.Types.ObjectId.isValid(employeeId)) {
-        emp = await Employee.findOne({ $or: [{ _id: employeeId }, { employeeId: employeeId.toUpperCase() }] });
-      } else {
-        emp = await Employee.findOne({ employeeId: employeeId.toUpperCase() });
-      }
+  if (employeeId) {
+    let emp;
+    if (mongoose.Types.ObjectId.isValid(employeeId)) {
+      emp = await Employee.findOne({ $or: [{ _id: employeeId }, { employeeId: employeeId.toUpperCase() }] });
+    } else {
+      emp = await Employee.findOne({ employeeId: employeeId.toUpperCase() });
+    }
 
-      if (emp) {
-        filter.employee = emp._id;
-      } else {
+    if (emp) {
+      filter.employee = emp._id;
+    } else {
+      return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+    }
+  }
+
+  if (department && department.trim() !== '') {
+    const dept = department.trim();
+    const escaped = dept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const canonicalKey = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(dept) : dept.toUpperCase();
+    const patterns = [
+      new RegExp(`^${escaped}$`, 'i'),
+      new RegExp(`^${canonicalKey}$`, 'i')
+    ];
+    if (canonicalKey === 'TECH') {
+      patterns.push(/tech/i, /engineering/i);
+    } else if (canonicalKey === 'TELECALLING') {
+      patterns.push(/tele/i, /calling/i, /client/i);
+    }
+
+    const matchingEmps = await Employee.find({
+      $or: patterns.map(p => ({ department: p }))
+    }).select('_id');
+
+    const empIds = matchingEmps.map(e => e._id);
+    if (filter.employee) {
+      if (!empIds.some(id => id.equals(filter.employee))) {
         return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
+    } else {
+      filter.employee = { $in: empIds };
     }
+  }
 
-    if (department) {
-      const employees = await Employee.find({ department: new RegExp(`^${String(department).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }).select('_id').lean();
-      const departmentEmployeeIds = employees.map(e => e._id);
-      if (filter.employee) {
-        if (!departmentEmployeeIds.some(id => id.equals(filter.employee))) {
-          return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
-        }
-      } else {
-        filter.employee = { $in: departmentEmployeeIds };
-      }
+  if (search && search.trim()) {
+    const searchText = search.trim().replace(/[^a-z0-9@ _.-]/gi, '');
+    if (!searchText) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+    const terms = searchText.split(/\s+/).filter(Boolean);
+    const matches = await Employee.find({ $and: terms.map(term => { const regex = new RegExp(term, 'i'); return { $or: [{ employeeId: regex }, { firstName: regex }, { lastName: regex }, { email: regex }] }; }) }).select('_id').lean();
+    const matchingIds = matches.map(employee => String(employee._id));
+    if (!matchingIds.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+    if (filter.employee) {
+      const currentIds = filter.employee.$in ? filter.employee.$in.map(String) : [String(filter.employee)];
+      const intersection = currentIds.filter(id => matchingIds.includes(id));
+      if (!intersection.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+      filter.employee = { $in: intersection };
+    } else {
+      filter.employee = { $in: matchingIds };
     }
+  }
 
-    if (search && search.trim()) {
-      const searchText = search.trim().replace(/[^a-z0-9@ _.-]/gi, '');
-      if (!searchText) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
-      const terms = searchText.split(/\s+/).filter(Boolean);
-      const matches = await Employee.find({ $and: terms.map(term => { const regex = new RegExp(term, 'i'); return { $or: [{ employeeId: regex }, { firstName: regex }, { lastName: regex }, { email: regex }] }; }) }).select('_id').lean();
-      const matchingIds = matches.map(employee => String(employee._id));
-      if (!matchingIds.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
-      if (filter.employee) {
-        const currentIds = filter.employee.$in ? filter.employee.$in.map(String) : [String(filter.employee)];
-        const intersection = currentIds.filter(id => matchingIds.includes(id));
-        if (!intersection.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
-        filter.employee = { $in: intersection };
-      } else {
-        filter.employee = { $in: matchingIds };
-      }
-    }
+  if (workMode && workMode.toLowerCase() !== 'all') {
+    const modeRegex = new RegExp('^' + workMode.trim() + '$', 'i');
+    const modeEmployees = await Employee.find({ workMode: modeRegex }).select('_id').lean();
+    const modeIds = modeEmployees.map(employee => employee._id);
+    const modeMatch = [{ workMode: modeRegex }];
+    if (modeIds.length) modeMatch.push({ employee: { $in: modeIds }, workMode: { $in: [null, ''] } });
+    filter.$and = [...(filter.$and || []), { $or: modeMatch }];
+  }
 
-    if (workMode && workMode.toLowerCase() !== 'all') {
-      const modeRegex = new RegExp('^' + workMode.trim() + '$', 'i');
-      const modeEmployees = await Employee.find({ workMode: modeRegex }).select('_id').lean();
-      const modeIds = modeEmployees.map(employee => employee._id);
-      const modeMatch = [{ workMode: modeRegex }];
-      if (modeIds.length) modeMatch.push({ employee: { $in: modeIds }, workMode: { $in: [null, ''] } });
-      filter.$and = [...(filter.$and || []), { $or: modeMatch }];
-    }
+  if (status === 'LATE') {
+    filter.late = true;
+    filter.checkIn = { $ne: null };
+  } else if (status) {
+    filter.status = status;
+  }
 
-    if (status === 'LATE') {
-      filter.late = true;
-      filter.checkIn = { $ne: null };
-    } else if (status) {
-      filter.status = status;
-    }
+  if (startDate || endDate) {
+    filter.date = {};
+    if (startDate) filter.date.$gte = getDayBounds(startDate).startOfDay;
+    if (endDate) filter.date.$lte = getDayBounds(endDate).endOfDay;
+  }
 
-    if (startDate || endDate) {
-      filter.date = {};
-      if (startDate) filter.date.$gte = getDayBounds(startDate).startOfDay;
-      if (endDate) filter.date.$lte = getDayBounds(endDate).endOfDay;
-    }
+  let rawAttendance;
+  let total;
 
-    let attendance;
-    let total;
+  if (status && status.toUpperCase() === 'LATE') {
+    const lateQuery = {
+      ...filter,
+      checkIn: { $ne: null },
+      $or: [{ late: true }, { isLate: true }, { status: 'LATE' }]
+    };
+    const lateRows = await Attendance.find(lateQuery)
+      .populate('employee', 'employeeId firstName lastName email department designation')
     if (status === 'LATE') {
       const lateFilter = { ...filter };
       delete lateFilter.late;
@@ -557,12 +646,22 @@ class HRService {
         .populate('employee', 'employeeId firstName lastName department designation status workMode')
         .sort({ date: -1, createdAt: -1 })
         .lean();
+
+      // If no explicit date range was supplied, restrict to current workday per schedule timezone
+      const currentWorkdayRows = (!startDate && !endDate)
+        ? lateRows.filter(row => isAttendanceForCurrentWorkday(row))
+        : lateRows;
+
       const currentWorkdayRows = (startDate || endDate) ? lateRows : lateRows.filter(row => isAttendanceForCurrentWorkday(row));
       total = currentWorkdayRows.length;
-      attendance = currentWorkdayRows.slice(skip, skip + limit);
+      rawAttendance = currentWorkdayRows.slice(skip, skip + limit);
     } else {
-      [attendance, total] = await Promise.all([
+      if (status) {
+        filter.status = status.toUpperCase();
+      }
+      [rawAttendance, total] = await Promise.all([
         Attendance.find(filter)
+          .populate('employee', 'employeeId firstName lastName email department designation')
           .populate('employee', 'employeeId firstName lastName department designation status workMode')
           .sort({ date: -1, createdAt: -1 })
           .skip(skip)
@@ -571,6 +670,78 @@ class HRService {
         Attendance.countDocuments(filter)
       ]);
     }
+
+    const attendance = await Promise.all(
+      rawAttendance.map(async (rec) => {
+        const isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
+        let minutesLate = rec.minutesLate || 0;
+        let snapshot = rec.scheduleSnapshot;
+
+        if (isLateRec && minutesLate === 0 && rec.checkIn) {
+          if (!snapshot && rec.employee?.department) {
+            const effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, rec.date);
+            if (effSched) {
+              snapshot = {
+                scheduleId: effSched._id,
+                department: effSched.department,
+                scheduledCheckIn: effSched.checkInTime,
+                scheduledCheckOut: effSched.checkOutTime || '18:00',
+                gracePeriodMinutes: effSched.gracePeriodMinutes || 0,
+                timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
+              };
+            }
+          }
+          if (snapshot && snapshot.scheduledCheckIn) {
+            const calc = calculateLateness(new Date(rec.checkIn), snapshot);
+            minutesLate = calc.minutesLate;
+          }
+        }
+
+        const workingHoursNum = Number(rec.workingHours) || 0;
+        const workedHoursInt = Math.floor(workingHoursNum);
+        const workedMinsInt = Math.round((workingHoursNum - workedHoursInt) * 60);
+        const workedDuration = workingHoursNum > 0
+          ? (workedMinsInt > 0 ? `${workedHoursInt}h ${workedMinsInt}m` : `${workedHoursInt}h`)
+          : '0h';
+
+        const totalBreakMins = Number(rec.totalBreakMinutes) || (Array.isArray(rec.breaks) ? rec.breaks.reduce((s, b) => s + (b.durationMinutes || 0), 0) : 0);
+        const formatBreakDurationStr = (mins = 0) => {
+          const m = Number(mins) || 0;
+          if (!m) return '0m';
+          const hours = Math.floor(m / 60);
+          const rem = m % 60;
+          if (hours > 0 && rem > 0) return `${hours}h ${rem}m`;
+          if (hours > 0) return `${hours}h`;
+          return `${rem}m`;
+        };
+
+        return {
+          ...rec,
+          id: rec._id ? rec._id.toString() : '',
+          staffId: rec.employee?._id ? rec.employee._id.toString() : (rec.employee ? rec.employee.toString() : ''),
+          employeeId: rec.employee?.employeeId || '',
+          checkInTime: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
+          checkOutTime: rec.checkOut ? new Date(rec.checkOut).toISOString() : null,
+          checkInAt: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
+          workedDuration,
+          breakDuration: formatBreakDurationStr(totalBreakMins),
+          totalBreakMinutes: totalBreakMins,
+          breaks: rec.breaks || [],
+          activeBreak: rec.activeBreak || null,
+          breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (rec.activeBreak?.startTime ? new Date(rec.activeBreak.startTime).toISOString() : null),
+          isLate: isLateRec,
+          late: isLateRec,
+          minutesLate,
+          scheduledCheckIn: rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null,
+          scheduledCheckOut: snapshot?.scheduledCheckOut || snapshot?.checkOutTime || null,
+          scheduleTimeZone: rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null,
+          timezone: rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null,
+          gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : (typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : 0),
+          scheduleSnapshot: snapshot || rec.scheduleSnapshot || null,
+          department: rec.employee?.department || rec.scheduleSnapshot?.department || null
+        };
+      })
+    );
 
     const totalPages = Math.ceil(total / limit) || 1;
 
@@ -701,6 +872,10 @@ class HRService {
     await leave.save();
 
     const updated = await Leave.findById(leave._id)
+      .populate('employee', 'employeeId firstName lastName department designation')
+      .populate('approvedBy', 'firstName lastName email')
+      .populate('document');
+    const updated = await Leave.findById(leave._id)
       .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .populate('approvedBy', 'firstName lastName email')
       .populate('document');
@@ -731,6 +906,10 @@ class HRService {
     leave.rejectionReason = rejectionReason || 'Leave request was not approved by HR.';
     await leave.save();
 
+    const updated = await Leave.findById(leave._id)
+      .populate('employee', 'employeeId firstName lastName department designation')
+      .populate('approvedBy', 'firstName lastName email')
+      .populate('document');
     const updated = await Leave.findById(leave._id)
       .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .populate('approvedBy', 'firstName lastName email')
@@ -852,7 +1031,7 @@ class HRService {
       typeSummary: typeCounts
     };
   }
-
+
   /**
    * Get Company-Wide Birthdays (Today & Upcoming within specified days)
    * Across BOTH Tech & Telecalling departments.
@@ -1053,18 +1232,19 @@ class HRService {
     return dept;
   }
 
-  async setDepartmentSchedule(department, { checkInTime, timeZone, gracePeriodMinutes = 0 } = {}) {
+  async setDepartmentSchedule(department, { checkInTime, timeZone, timezone, gracePeriodMinutes = 0 } = {}) {
     const name = String(department || '').trim();
     if (!name || name.length > 100) throw new AppError('A valid department key is required', 400);
     if (typeof checkInTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkInTime)) {
       throw new AppError('Check-in time must use 24-hour HH:mm format', 400);
     }
-    if (typeof timeZone !== 'string' || !timeZone.trim()) throw new AppError('IANA time zone is required', 400);
+    const tz = timeZone || timezone;
+    if (typeof tz !== 'string' || !tz.trim()) throw new AppError('IANA time zone is required', 400);
     if (!Number.isSafeInteger(gracePeriodMinutes) || gracePeriodMinutes < 0) {
       throw new AppError('Grace period must be a non-negative integer', 400);
     }
     try {
-      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+      new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date());
     } catch (_) {
       throw new AppError('Invalid time zone', 400);
     }
@@ -1072,7 +1252,7 @@ class HRService {
     if (!exists) throw new AppError('Department not found', 404);
     return DepartmentSchedule.findOneAndUpdate(
       { department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-      { $set: { department: name, checkInTime, timeZone, gracePeriodMinutes } },
+      { $set: { department: name, checkInTime, timeZone: tz, timezone: tz, gracePeriodMinutes } },
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
   }
@@ -1084,6 +1264,157 @@ class HRService {
     const employeeExists = await Employee.exists({ department: new RegExp(`^${escaped}$`, 'i') });
     if (!employeeExists) throw new AppError('Department not found', 404);
     return DepartmentSchedule.findOne({ department: new RegExp(`^${escaped}$`, 'i') }).lean();
+  }
+
+  /**
+   * Create or update a department schedule (effective-date versioned)
+   */
+  async createDepartmentSchedule({ department, checkInTime, checkOutTime = '18:00', gracePeriodMinutes = 0, timezone = 'Asia/Kolkata', effectiveDate, description = '', user = null }) {
+    if (!department) {
+      throw new AppError('Department is required', 400);
+    }
+    if (!checkInTime) {
+      throw new AppError('Check-in time is required', 400);
+    }
+
+    const effDate = effectiveDate ? new Date(effectiveDate) : new Date();
+    if (isNaN(effDate.getTime())) {
+      throw new AppError('Invalid effective date format', 400);
+    }
+
+    const canonicalDept = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
+
+    const schedule = new DepartmentSchedule({
+      department: canonicalDept,
+      departmentDisplay: department.trim(),
+      checkInTime: checkInTime.trim(),
+      checkOutTime: (checkOutTime || '18:00').trim(),
+      gracePeriodMinutes: Number(gracePeriodMinutes) || 0,
+      timezone: timezone.trim() || 'Asia/Kolkata',
+      effectiveDate: effDate,
+      description: description ? description.trim() : '',
+      createdBy: user ? user._id : null,
+      updatedBy: user ? user._id : null
+    });
+
+    await schedule.save();
+    return schedule;
+  }
+
+  /**
+   * Get all schedule versions, optionally filtered by department
+   */
+  async getDepartmentSchedules({ department } = {}) {
+    const filter = {};
+    if (department) {
+      filter.department = department.trim().toUpperCase();
+    }
+    return await DepartmentSchedule.find(filter)
+      .sort({ department: 1, effectiveDate: -1, createdAt: -1 })
+      .populate('createdBy', 'firstName lastName email')
+      .populate('updatedBy', 'firstName lastName email')
+      .lean();
+  }
+
+  /**
+   * Get effective schedule for a department key (along with historical versions)
+   */
+  async getDepartmentScheduleByKey(deptKey, targetDate = new Date()) {
+    const key = (deptKey || '').trim().toUpperCase();
+    const effectiveSchedule = await DepartmentSchedule.getEffectiveSchedule(key, targetDate);
+    const history = await DepartmentSchedule.find({ department: key })
+      .sort({ effectiveDate: -1, createdAt: -1 })
+      .populate('createdBy', 'firstName lastName email')
+      .lean();
+
+    return {
+      department: key,
+      effectiveSchedule,
+      history
+    };
+  }
+
+  /**
+   * Safe, auditable historical reclassification of attendance records
+   */
+  async reclassifyHistoricalAttendance({ startDate, endDate, department, dryRun = true, user = null }) {
+    const filter = {};
+    if (startDate || endDate) {
+      filter.date = {};
+      if (startDate) filter.date.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.date.$lte = end;
+      }
+    }
+
+    if (department && department.trim() !== '') {
+      const canonical = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
+      const emps = await Employee.find({
+        $or: [
+          { department: new RegExp(`^${department.trim()}$`, 'i') },
+          { department: new RegExp(`^${canonical}$`, 'i') }
+        ]
+      }).select('_id');
+      filter.employee = { $in: emps.map(e => e._id) };
+    }
+
+    const records = await Attendance.find(filter).populate('employee');
+    const modifications = [];
+
+    for (const record of records) {
+      if (!record.checkIn || !record.employee?.department) continue;
+
+      const schedule = await DepartmentSchedule.getEffectiveSchedule(record.employee.department, record.date);
+      const latenessResult = calculateLateness(record.checkIn, schedule);
+
+      const isChanged = record.isLate !== latenessResult.isLate ||
+        record.minutesLate !== latenessResult.minutesLate ||
+        (latenessResult.isLate && record.status !== 'LATE');
+
+      const plan = {
+        attendanceId: record._id,
+        employeeId: record.employee.employeeId,
+        employeeName: `${record.employee.firstName} ${record.employee.lastName}`,
+        department: record.employee.department,
+        date: record.date,
+        checkIn: record.checkIn,
+        current: {
+          status: record.status,
+          isLate: record.isLate,
+          minutesLate: record.minutesLate
+        },
+        proposed: {
+          status: latenessResult.isLate ? 'LATE' : record.status,
+          isLate: latenessResult.isLate,
+          minutesLate: latenessResult.minutesLate,
+          scheduleStatus: latenessResult.scheduleStatus,
+          scheduleSnapshot: latenessResult.scheduleSnapshot
+        },
+        isChanged
+      };
+
+      modifications.push(plan);
+
+      if (!dryRun && isChanged) {
+        record.isLate = latenessResult.isLate;
+        record.minutesLate = latenessResult.minutesLate;
+        record.scheduleStatus = latenessResult.scheduleStatus;
+        record.scheduleSnapshot = latenessResult.scheduleSnapshot;
+        if (latenessResult.isLate) {
+          record.status = 'LATE';
+        }
+        await record.save();
+      }
+    }
+
+    return {
+      dryRun,
+      totalScanned: records.length,
+      changedCount: modifications.filter(m => m.isChanged).length,
+      modifications
+    };
   }
 }
 
