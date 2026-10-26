@@ -218,6 +218,7 @@ const run = async () => {
     const spoofAttemptRes = await makeRequest(server, 'POST', '/api/staff/daily-updates', {
       Authorization: `Bearer ${staffAToken}`
     }, {
+      title: 'Frontend API Integration',
       updateText: 'Completed the Flutter HR Dashboard integration and unit tests.',
       date: '2026-10-22',
       tasksCompleted: ['Refactored API service', 'Verified mock data compatibility'],
@@ -234,6 +235,9 @@ const run = async () => {
     }
 
     const createdUpdate = spoofAttemptRes.body.data;
+    if (createdUpdate.title !== 'Frontend API Integration') {
+      throw new Error(`Title mismatch! Expected "Frontend API Integration", got "${createdUpdate.title}"`);
+    }
     if (createdUpdate.employeeId !== 'EMP101') {
       throw new Error(`Identity spoofing vulnerability! Expected EMP101, got ${createdUpdate.employeeId}`);
     }
@@ -251,6 +255,9 @@ const run = async () => {
     const dbRecord = await DailyUpdate.findById(createdUpdate.id);
     if (!dbRecord) {
       throw new Error(`Record ${createdUpdate.id} was NOT found in MongoDB!`);
+    }
+    if (dbRecord.title !== 'Frontend API Integration') {
+      throw new Error(`Title mismatch in database: ${dbRecord.title}`);
     }
     if (dbRecord.updateText !== 'Completed the Flutter HR Dashboard integration and unit tests.') {
       throw new Error(`Update text mismatch in database: ${dbRecord.updateText}`);
@@ -325,15 +332,15 @@ const run = async () => {
     }
     console.log('  ✓ Both HR and Super Admin successfully retrieved company-wide updates (2 items).');
 
-    // Verify response schema contract compatibility with Flutter frontend
+    // Verify response schema contract compatibility with Flutter HR Dashboard
     const sample = hrListRes.body.data[0];
-    const requiredKeys = ['id', '_id', 'staffId', 'employeeId', 'employeeName', 'department', 'date', 'updateText', 'createdAt'];
+    const requiredKeys = ['id', '_id', 'staffId', 'employeeId', 'employeeName', 'department', 'title', 'date', 'updateText', 'createdAt'];
     for (const key of requiredKeys) {
       if (sample[key] === undefined) {
         throw new Error(`Missing expected key "${key}" in HR response object: ${JSON.stringify(sample)}`);
       }
     }
-    console.log('  ✓ Response schema contract verified: id, staffId, employeeId, employeeName, department, date, updateText, and createdAt present.');
+    console.log('  ✓ Response schema contract verified: id, staffId, employeeId, employeeName, department, title, date, updateText, and createdAt present.');
 
     // 11. Filtering and Pagination
     console.log('\n[11/12] Testing department, employee, date filtering and pagination...');

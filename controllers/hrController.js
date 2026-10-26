@@ -238,6 +238,24 @@ class HRController {
     }
   }
 
+  async setDepartmentSchedule(req, res, next) {
+    try {
+      const schedule = await hrService.setDepartmentSchedule(req.params.deptKey, req.body);
+      return sendSuccess(res, 'Department attendance schedule saved successfully', schedule);
+    } catch (err) { next(err); }
+  }
+
+  async getDepartmentSchedule(req, res, next) {
+    try {
+      if (req.query.detailed === 'true' || req.query.date) {
+        const scheduleInfo = await hrService.getDepartmentScheduleByKey(req.params.deptKey, req.query.date);
+        return sendSuccess(res, 'Department schedule details retrieved successfully', scheduleInfo);
+      }
+      const schedule = await hrService.getDepartmentSchedule(req.params.deptKey);
+      return sendSuccess(res, 'Department attendance schedule retrieved successfully', schedule);
+    } catch (err) { next(err); }
+  }
+
   /**
    * POST /api/hr/departments/schedules or /api/hr/departments/:deptKey/schedule
    */

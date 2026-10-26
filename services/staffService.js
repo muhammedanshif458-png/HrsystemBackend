@@ -7,6 +7,7 @@ const Leave = require('../models/Leave');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
+const { getDateKey, getUtcDateForKey, classifyCheckIn, getScheduleForDepartment } = require('../utils/attendanceSchedule');
 
 /**
  * Normalize date to UTC midnight for consistent daily tracking
@@ -45,8 +46,10 @@ class StaffService {
    */
   async getDashboard(user) {
     const employee = await this.getEmployeeOrThrow(user);
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    const today = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(today, schedule.timeZone)) : getMidnightToday(today);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     // Check today's attendance
     const todayAttendance = await Attendance.findOne({
@@ -154,50 +157,62 @@ class StaffService {
   /**
    * Attendance check-in
    */
-  async checkIn(user, remarks = '') {
+  async checkIn(user, remarks = '', checkIn = new Date()) {
     const employee = await this.getEmployeeOrThrow(user);
 
     if (employee.status !== 'ACTIVE') {
       throw new AppError(`Cannot check in. Employee status is currently: ${employee.status}`, 400);
     }
 
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    if (!(checkIn instanceof Date) || Number.isNaN(checkIn.getTime())) {
+      throw new AppError('Invalid check-in timestamp', 400);
+    }
+    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    // Without a configured schedule, retain the legacy UTC workday and do not infer lateness.
+    const date = schedule ? getUtcDateForKey(getDateKey(checkIn, tz)) : getMidnightToday(checkIn);
+    const dayEnd = new Date(date.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     // Check if attendance already recorded today
     const existingAttendance = await Attendance.findOne({
       employee: employee._id,
-      date: { $gte: todayMidnight, $lte: todayEnd }
+      date: { $gte: date, $lte: dayEnd }
     });
 
     if (existingAttendance) {
       throw new AppError('You have already checked in for today', 400);
     }
 
-    const now = new Date();
-    let isLate = false;
+    const classification = classifyCheckIn(checkIn, schedule);
+    const isLate = Boolean(classification.late);
     let minutesLate = 0;
-    let scheduleStatus = 'UNCONFIGURED';
+    let scheduleStatus = classification.scheduleConfigured ? 'CONFIGURED' : 'UNCONFIGURED';
     let scheduleSnapshot = null;
 
-    if (employee.department) {
-      try {
-        const schedule = await DepartmentSchedule.getEffectiveSchedule(employee.department, now);
-        const latenessResult = calculateLateness(now, schedule);
-        isLate = latenessResult.isLate;
-        minutesLate = latenessResult.minutesLate;
-        scheduleStatus = latenessResult.scheduleStatus;
-        scheduleSnapshot = latenessResult.scheduleSnapshot;
-      } catch (err) {
-        scheduleStatus = 'UNCONFIGURED';
+    if (schedule && classification.scheduleConfigured) {
+      const [hour, minute] = schedule.checkInTime.split(':').map(Number);
+      const { getLocalParts } = require('../utils/attendanceSchedule');
+      const local = getLocalParts(checkIn, tz);
+      const actualMinutes = Number(local.hour) * 60 + Number(local.minute);
+      const scheduledMinutes = hour * 60 + minute;
+      if (isLate) {
+        minutesLate = Math.max(0, actualMinutes - scheduledMinutes);
       }
+      scheduleSnapshot = {
+        department: schedule.department,
+        scheduledCheckIn: schedule.checkInTime,
+        scheduledCheckOut: schedule.checkOutTime || '18:00',
+        gracePeriodMinutes: schedule.gracePeriodMinutes || 0,
+        timezone: tz
+      };
     }
 
     const attendance = new Attendance({
       employee: employee._id,
-      date: todayMidnight,
-      checkIn: now,
-      status: isLate ? 'LATE' : 'PRESENT',
+      date,
+      checkIn,
+      status: 'PRESENT',
+      ...classification,
       isLate,
       minutesLate,
       scheduleStatus,
@@ -214,9 +229,10 @@ class StaffService {
    */
   async checkOut(user, remarks = '') {
     const employee = await this.getEmployeeOrThrow(user);
-
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    const today = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(today, schedule.timeZone)) : getMidnightToday(today);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const attendance = await Attendance.findOne({
       employee: employee._id,
@@ -281,8 +297,11 @@ class StaffService {
       throw new AppError(`Cannot start break. Employee status is currently: ${employee.status}`, 400);
     }
 
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const now = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const attendance = await Attendance.findOne({
       employee: employee._id,
@@ -316,7 +335,6 @@ class StaffService {
       throw new AppError(`${breakType} has already been taken today`, 400);
     }
 
-    const now = new Date();
     const breakItem = {
       breakType,
       startTime: now,
@@ -345,8 +363,11 @@ class StaffService {
   async endBreak(user, body = {}) {
     const employee = await this.getEmployeeOrThrow(user);
 
-    const todayMidnight = getMidnightToday();
-    const todayEnd = getEndOfDay();
+    const schedule = await getScheduleForDepartment(employee.department);
+    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const now = new Date();
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
+    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const attendance = await Attendance.findOne({
       employee: employee._id,
@@ -374,7 +395,6 @@ class StaffService {
       }
     }
 
-    const now = new Date();
     const activeBreakId = attendance.activeBreak.breakId;
     let targetBreak = activeBreakId ? attendance.breaks.id(activeBreakId) : null;
     if (!targetBreak) {

@@ -5,8 +5,7 @@ const departmentScheduleSchema = new mongoose.Schema(
     department: {
       type: String,
       required: [true, 'Department is required'],
-      trim: true,
-      uppercase: true // Canonical uppercase index (e.g. 'TECH', 'TELECALLING')
+      trim: true
     },
     departmentDisplay: {
       type: String,
@@ -16,12 +15,12 @@ const departmentScheduleSchema = new mongoose.Schema(
     checkInTime: {
       type: String,
       required: [true, 'Check-in time is required (format HH:mm)'],
-      match: [/^([01]\d|2[0-3]):([0-5]\d)$/, 'Check-in time must be in 24-hour HH:mm format']
+      match: [/^([01]\d|2[0-3]):[0-5]\d$/, 'Check-in time must be in 24-hour HH:mm format']
     },
     checkOutTime: {
       type: String,
       default: '18:00',
-      match: [/^([01]\d|2[0-3]):([0-5]\d)$/, 'Check-out time must be in 24-hour HH:mm format']
+      match: [/^([01]\d|2[0-3]):[0-5]\d$/, 'Check-out time must be in 24-hour HH:mm format']
     },
     gracePeriodMinutes: {
       type: Number,
@@ -31,11 +30,16 @@ const departmentScheduleSchema = new mongoose.Schema(
     timezone: {
       type: String,
       default: 'Asia/Kolkata',
-      required: [true, 'Timezone is required']
+      trim: true
+    },
+    timeZone: {
+      type: String,
+      default: 'Asia/Kolkata',
+      trim: true
     },
     effectiveDate: {
       type: Date,
-      required: [true, 'Effective date is required']
+      default: Date.now
     },
     description: {
       type: String,
@@ -58,6 +62,14 @@ const departmentScheduleSchema = new mongoose.Schema(
   }
 );
 
+// Synchronize timezone and timeZone fields on save
+departmentScheduleSchema.pre('save', function(next) {
+  if (this.timeZone && !this.timezone) this.timezone = this.timeZone;
+  if (this.timezone && !this.timeZone) this.timeZone = this.timezone;
+  if (!this.departmentDisplay) this.departmentDisplay = this.department;
+  next();
+});
+
 // Compound index for fast effective-date lookups per department
 departmentScheduleSchema.index({ department: 1, effectiveDate: -1, createdAt: -1 });
 
@@ -78,18 +90,29 @@ departmentScheduleSchema.statics.toCanonicalDeptKey = function(deptName) {
  */
 departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmentName, targetDate = new Date()) {
   if (!departmentName) return null;
-  const rawDept = departmentName.trim().toUpperCase();
+  const rawDept = departmentName.trim();
   const canonicalDept = this.toCanonicalDeptKey(departmentName);
 
   const dateObj = new Date(targetDate);
-
-  // Normalize end of day to include schedules effective on this date
   const endOfTargetDate = new Date(dateObj);
   endOfTargetDate.setUTCHours(23, 59, 59, 999);
 
+  const deptQuery = [
+    { department: new RegExp(`^${canonicalDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+    { department: new RegExp(`^${rawDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+  ];
+
   return this.findOne({
-    department: { $in: [canonicalDept, rawDept] },
-    effectiveDate: { $lte: endOfTargetDate }
+    $and: [
+      { $or: deptQuery },
+      {
+        $or: [
+          { effectiveDate: { $lte: endOfTargetDate } },
+          { effectiveDate: null },
+          { effectiveDate: { $exists: false } }
+        ]
+      }
+    ]
   })
     .sort({ effectiveDate: -1, createdAt: -1 })
     .lean();

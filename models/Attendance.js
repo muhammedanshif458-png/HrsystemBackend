@@ -47,6 +47,10 @@ const attendanceSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    late: { type: Boolean, default: false },
+    scheduleConfigured: { type: Boolean, default: false },
+    scheduledCheckIn: { type: String, default: null },
+    scheduleTimeZone: { type: String, default: null },
     checkOut: {
       type: Date,
       default: null
@@ -149,24 +153,12 @@ attendanceSchema.index({ date: 1, status: 1 });
 attendanceSchema.index({ date: 1, isLate: 1 });
 
 // Virtual getters for backward compatibility with existing consumers (e.g. Flutter HR Dashboard)
-attendanceSchema.virtual('late').get(function() {
-  return Boolean(this.isLate || this.status === 'LATE');
-});
-
-attendanceSchema.virtual('scheduledCheckIn').get(function() {
-  return this.scheduleSnapshot?.scheduledCheckIn || null;
-});
-
 attendanceSchema.virtual('scheduledCheckOut').get(function() {
   return this.scheduleSnapshot?.scheduledCheckOut || null;
 });
 
-attendanceSchema.virtual('scheduleTimeZone').get(function() {
-  return this.scheduleSnapshot?.timezone || null;
-});
-
 attendanceSchema.virtual('timezone').get(function() {
-  return this.scheduleSnapshot?.timezone || null;
+  return this.scheduleTimeZone || this.scheduleSnapshot?.timezone || null;
 });
 
 attendanceSchema.virtual('department').get(function() {

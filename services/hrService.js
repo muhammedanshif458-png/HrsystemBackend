@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
+const { isAttendanceForCurrentWorkday } = require('../utils/attendanceSchedule');
 const Leave = require('../models/Leave');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { AppError } = require('../middleware/errorMiddleware');
@@ -13,8 +14,8 @@ const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveRes
  */
 const getDayBounds = (dateStr = null) => {
   const date = dateStr ? new Date(dateStr) : new Date();
-  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+  const startOfDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
   return { startOfDay, endOfDay };
 };
 
@@ -30,6 +31,7 @@ class HRService {
       activeEmployees,
       inactiveEmployees,
       todayAttendanceCounts,
+      lateArrivals,
       todayLateCount,
       pendingLeaves,
       approvedLeaves
@@ -50,6 +52,8 @@ class HRService {
           }
         }
       ]),
+      Attendance.find({ checkIn: { $ne: null }, late: true })
+        .select('date checkIn scheduleTimeZone').lean(),
       Attendance.countDocuments({
         date: { $gte: startOfDay, $lte: endOfDay },
         $or: [{ status: 'LATE' }, { isLate: true }]
@@ -69,14 +73,16 @@ class HRService {
       }
     });
 
+    const lateRecords = lateArrivals.filter(record => isAttendanceForCurrentWorkday(record));
+
     return {
       totalEmployees,
       activeEmployees,
       inactiveEmployees,
       todayPresent,
-      todayLate: todayLateCount,
-      lateArrivals: todayLateCount,
+      todayLate: lateRecords.length,
       todayAbsent,
+      lateArrivals: lateRecords.length,
       pendingLeaves,
       approvedLeaves
     };
@@ -225,19 +231,19 @@ class HRService {
         }
         await newUser.save();
       } else {
-      // Create user with STAFF role
-      newUser = new User({
-        firstName,
-        lastName,
-        email: normalizedEmail,
-        phone: phone || '',
-        password: finalPassword,
-        role: 'STAFF',
-        profileImage: profileImage || null,
-        isActive: status === 'ACTIVE'
-      });
+        // Create user with STAFF role
+        newUser = new User({
+          firstName,
+          lastName,
+          email: normalizedEmail,
+          phone: phone || '',
+          password: finalPassword,
+          role: 'STAFF',
+          profileImage: profileImage || null,
+          isActive: status === 'ACTIVE'
+        });
 
-      await newUser.save();
+        await newUser.save();
       }
 
       // Create employee profile linked to user
@@ -283,7 +289,7 @@ class HRService {
       if (newUser && newUser._id) {
         try {
           await User.findByIdAndDelete(newUser._id);
-        } catch (_) {}
+        } catch (_) { }
       }
       throw err;
     }
@@ -292,7 +298,7 @@ class HRService {
   /**
    * Get employee by ID
    */
-  
+
   async getEmployeeById(id) {
     let query = {};
     if (mongoose.Types.ObjectId.isValid(id)) {
@@ -470,7 +476,7 @@ class HRService {
   /**
    * Delete or deactivate employee
    */
-  
+
   async deleteEmployee(id) {
     const employee = await this.getEmployeeById(id);
 
@@ -549,9 +555,10 @@ class HRService {
 
     if (department && department.trim() !== '') {
       const dept = department.trim();
+      const escaped = dept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const canonicalKey = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(dept) : dept.toUpperCase();
       const patterns = [
-        new RegExp(`^${dept}$`, 'i'),
+        new RegExp(`^${escaped}$`, 'i'),
         new RegExp(`^${canonicalKey}$`, 'i')
       ];
       if (canonicalKey === 'TECH') {
@@ -574,14 +581,6 @@ class HRService {
       }
     }
 
-    if (status) {
-      if (status.toUpperCase() === 'LATE') {
-        filter.$or = [{ status: 'LATE' }, { isLate: true }];
-      } else {
-        filter.status = status.toUpperCase();
-      }
-    }
-
     if (startDate || endDate) {
       filter.date = {};
       if (startDate) filter.date.$gte = new Date(startDate);
@@ -592,19 +591,45 @@ class HRService {
       }
     }
 
-    const [rawAttendance, total] = await Promise.all([
-      Attendance.find(filter)
+    let rawAttendance;
+    let total;
+
+    if (status && status.toUpperCase() === 'LATE') {
+      const lateQuery = {
+        ...filter,
+        checkIn: { $ne: null },
+        $or: [{ late: true }, { isLate: true }, { status: 'LATE' }]
+      };
+      const lateRows = await Attendance.find(lateQuery)
         .populate('employee', 'employeeId firstName lastName email department designation')
         .sort({ date: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Attendance.countDocuments(filter)
-    ]);
+        .lean();
+
+      // If no explicit date range was supplied, restrict to current workday per schedule timezone
+      const currentWorkdayRows = (!startDate && !endDate)
+        ? lateRows.filter(row => isAttendanceForCurrentWorkday(row))
+        : lateRows;
+
+      total = currentWorkdayRows.length;
+      rawAttendance = currentWorkdayRows.slice(skip, skip + limit);
+    } else {
+      if (status) {
+        filter.status = status.toUpperCase();
+      }
+      [rawAttendance, total] = await Promise.all([
+        Attendance.find(filter)
+          .populate('employee', 'employeeId firstName lastName email department designation')
+          .sort({ date: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Attendance.countDocuments(filter)
+      ]);
+    }
 
     const attendance = await Promise.all(
       rawAttendance.map(async (rec) => {
-        const isLateRec = Boolean(rec.isLate || rec.status === 'LATE');
+        const isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
         let minutesLate = rec.minutesLate || 0;
         let snapshot = rec.scheduleSnapshot;
 
@@ -618,7 +643,7 @@ class HRService {
                 scheduledCheckIn: effSched.checkInTime,
                 scheduledCheckOut: effSched.checkOutTime || '18:00',
                 gracePeriodMinutes: effSched.gracePeriodMinutes || 0,
-                timezone: effSched.timezone || 'Asia/Kolkata'
+                timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
               };
             }
           }
@@ -663,11 +688,11 @@ class HRService {
           isLate: isLateRec,
           late: isLateRec,
           minutesLate,
-          scheduledCheckIn: snapshot?.scheduledCheckIn || snapshot?.checkInTime || null,
+          scheduledCheckIn: rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null,
           scheduledCheckOut: snapshot?.scheduledCheckOut || snapshot?.checkOutTime || null,
-          scheduleTimeZone: snapshot?.timezone || null,
-          timezone: snapshot?.timezone || null,
-          gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0,
+          scheduleTimeZone: rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null,
+          timezone: rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null,
+          gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : (typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : 0),
           scheduleSnapshot: snapshot || rec.scheduleSnapshot || null,
           department: rec.employee?.department || rec.scheduleSnapshot?.department || null
         };
@@ -685,623 +710,661 @@ class HRService {
   /**
    * Get attendance for a specific employee
    */
-  async getAttendanceByEmployeeId(empIdentifier, { page = 1, limit = 20, startDate, endDate }) {
-    let emp;
-    if (mongoose.Types.ObjectId.isValid(empIdentifier)) {
-      emp = await Employee.findOne({ $or: [{ _id: empIdentifier }, { employeeId: empIdentifier.toUpperCase() }] });
-    } else {
-      emp = await Employee.findOne({ employeeId: empIdentifier.toUpperCase() });
-    }
+  async getAttendanceByEmployeeId(empIdentifier, { page = 1, limit = 20, startDate, endDate, status }) {
+        let emp;
+        if (mongoose.Types.ObjectId.isValid(empIdentifier)) {
+          emp = await Employee.findOne({ $or: [{ _id: empIdentifier }, { employeeId: empIdentifier.toUpperCase() }] });
+        } else {
+          emp = await Employee.findOne({ employeeId: empIdentifier.toUpperCase() });
+        }
 
-    if (!emp) {
-      throw new AppError('Employee not found', 404);
-    }
+        if (!emp) {
+          throw new AppError('Employee not found', 404);
+        }
 
-    return this.getAttendance({ page, limit, employeeId: emp._id.toString(), startDate, endDate });
-  }
+        return this.getAttendance({ page, limit, employeeId: emp._id.toString(), startDate, endDate, status });
+      }
 
   /**
    * Get leaves for HR
    */
   async getLeaves({ page = 1, limit = 20, employeeId, status, leaveType, startDate, endDate }) {
-    page = Math.max(1, parseInt(page, 10));
-    limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
-    const skip = (page - 1) * limit;
+        page = Math.max(1, parseInt(page, 10));
+        limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+        const skip = (page - 1) * limit;
 
-    const filter = {};
+        const filter = {};
 
-    if (employeeId) {
-      let emp;
-      if (mongoose.Types.ObjectId.isValid(employeeId)) {
-        emp = await Employee.findOne({ $or: [{ _id: employeeId }, { employeeId: employeeId.toUpperCase() }] });
-      } else {
-        emp = await Employee.findOne({ employeeId: employeeId.toUpperCase() });
+        if (employeeId) {
+          let emp;
+          if (mongoose.Types.ObjectId.isValid(employeeId)) {
+            emp = await Employee.findOne({ $or: [{ _id: employeeId }, { employeeId: employeeId.toUpperCase() }] });
+          } else {
+            emp = await Employee.findOne({ employeeId: employeeId.toUpperCase() });
+          }
+
+          if (emp) {
+            filter.employee = emp._id;
+          } else {
+            return { leaves: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+          }
+        }
+
+        if (status) filter.status = status;
+        if (leaveType) filter.leaveType = leaveType;
+
+        if (startDate || endDate) {
+          if (startDate && endDate) {
+            filter.startDate = { $gte: new Date(startDate) };
+            filter.endDate = { $lte: new Date(endDate) };
+          } else if (startDate) {
+            filter.startDate = { $gte: new Date(startDate) };
+          } else if (endDate) {
+            filter.endDate = { $lte: new Date(endDate) };
+          }
+        }
+
+        const [leaves, total] = await Promise.all([
+          Leave.find(filter)
+            .populate('employee', 'employeeId firstName lastName department designation email')
+            .populate('approvedBy', 'firstName lastName email role')
+            .populate('document')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+          Leave.countDocuments(filter)
+        ]);
+
+        const totalPages = Math.ceil(total / limit) || 1;
+
+        return {
+          leaves: enrichLeaveResponses(leaves, 'hr'),
+          pagination: { page, limit, total, totalPages }
+        };
       }
-
-      if (emp) {
-        filter.employee = emp._id;
-      } else {
-        return { leaves: [], pagination: { page, limit, total: 0, totalPages: 0 } };
-      }
-    }
-
-    if (status) filter.status = status;
-    if (leaveType) filter.leaveType = leaveType;
-
-    if (startDate || endDate) {
-      if (startDate && endDate) {
-        filter.startDate = { $gte: new Date(startDate) };
-        filter.endDate = { $lte: new Date(endDate) };
-      } else if (startDate) {
-        filter.startDate = { $gte: new Date(startDate) };
-      } else if (endDate) {
-        filter.endDate = { $lte: new Date(endDate) };
-      }
-    }
-
-    const [leaves, total] = await Promise.all([
-      Leave.find(filter)
-        .populate('employee', 'employeeId firstName lastName department designation email')
-        .populate('approvedBy', 'firstName lastName email role')
-        .populate('document')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Leave.countDocuments(filter)
-    ]);
-
-    const totalPages = Math.ceil(total / limit) || 1;
-
-    return {
-      leaves: enrichLeaveResponses(leaves, 'hr'),
-      pagination: { page, limit, total, totalPages }
-    };
-  }
 
   /**
    * Get single leave by ID
    */
   async getLeaveById(id) {
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      throw new AppError('Invalid leave ID', 400);
-    }
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+          throw new AppError('Invalid leave ID', 400);
+        }
 
-    const leave = await Leave.findById(id)
-      .populate('employee', 'employeeId firstName lastName department designation email')
-      .populate('approvedBy', 'firstName lastName email role')
-      .populate('document');
+        const leave = await Leave.findById(id)
+          .populate('employee', 'employeeId firstName lastName department designation email')
+          .populate('approvedBy', 'firstName lastName email role')
+          .populate('document');
 
-    if (!leave) {
-      throw new AppError('Leave request not found', 404);
-    }
+        if (!leave) {
+          throw new AppError('Leave request not found', 404);
+        }
 
-    return enrichLeaveResponse(leave, 'hr');
-  }
+        return enrichLeaveResponse(leave, 'hr');
+      }
 
   /**
    * Approve leave request
    */
   async approveLeave(id, adminUserId) {
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      throw new AppError('Invalid leave ID', 400);
-    }
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+          throw new AppError('Invalid leave ID', 400);
+        }
 
-    const leave = await Leave.findById(id);
-    if (!leave) {
-      throw new AppError('Leave request not found', 404);
-    }
+        const leave = await Leave.findById(id);
+        if (!leave) {
+          throw new AppError('Leave request not found', 404);
+        }
 
-    if (leave.status !== 'PENDING') {
-      throw new AppError(`Cannot approve leave request with status: ${leave.status}`, 400);
-    }
+        if (leave.status !== 'PENDING') {
+          throw new AppError(`Cannot approve leave request with status: ${leave.status}`, 400);
+        }
 
-    leave.status = 'APPROVED';
-    leave.approvedBy = adminUserId;
-    leave.approvedAt = new Date();
-    leave.rejectionReason = null;
-    await leave.save();
+        leave.status = 'APPROVED';
+        leave.approvedBy = adminUserId;
+        leave.approvedAt = new Date();
+        leave.rejectionReason = null;
+        await leave.save();
 
-    const updated = await Leave.findById(leave._id)
-      .populate('employee', 'employeeId firstName lastName department designation')
-      .populate('approvedBy', 'firstName lastName email')
-      .populate('document');
+        const updated = await Leave.findById(leave._id)
+          .populate('employee', 'employeeId firstName lastName department designation')
+          .populate('approvedBy', 'firstName lastName email')
+          .populate('document');
 
-    return enrichLeaveResponse(updated, 'hr');
-  }
+        return enrichLeaveResponse(updated, 'hr');
+      }
 
   /**
    * Reject leave request
    */
   async rejectLeave(id, adminUserId, rejectionReason = '') {
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      throw new AppError('Invalid leave ID', 400);
-    }
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+          throw new AppError('Invalid leave ID', 400);
+        }
 
-    const leave = await Leave.findById(id);
-    if (!leave) {
-      throw new AppError('Leave request not found', 404);
-    }
+        const leave = await Leave.findById(id);
+        if (!leave) {
+          throw new AppError('Leave request not found', 404);
+        }
 
-    if (leave.status !== 'PENDING') {
-      throw new AppError(`Cannot reject leave request with status: ${leave.status}`, 400);
-    }
+        if (leave.status !== 'PENDING') {
+          throw new AppError(`Cannot reject leave request with status: ${leave.status}`, 400);
+        }
 
-    leave.status = 'REJECTED';
-    leave.approvedBy = adminUserId;
-    leave.approvedAt = new Date();
-    leave.rejectionReason = rejectionReason || 'Leave request was not approved by HR.';
-    await leave.save();
+        leave.status = 'REJECTED';
+        leave.approvedBy = adminUserId;
+        leave.approvedAt = new Date();
+        leave.rejectionReason = rejectionReason || 'Leave request was not approved by HR.';
+        await leave.save();
 
-    const updated = await Leave.findById(leave._id)
-      .populate('employee', 'employeeId firstName lastName department designation')
-      .populate('approvedBy', 'firstName lastName email')
-      .populate('document');
+        const updated = await Leave.findById(leave._id)
+          .populate('employee', 'employeeId firstName lastName department designation')
+          .populate('approvedBy', 'firstName lastName email')
+          .populate('document');
 
-    return enrichLeaveResponse(updated, 'hr');
-  }
+        return enrichLeaveResponse(updated, 'hr');
+      }
 
   /**
    * HR Attendance Reports
    */
   async getAttendanceReports({ startDate, endDate, department }) {
-    const matchFilter = {};
+        const matchFilter = {};
 
-    if (startDate || endDate) {
-      matchFilter.date = {};
-      if (startDate) matchFilter.date.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        matchFilter.date.$lte = end;
-      }
-    }
-
-    const summaryPipeline = [
-      { $match: matchFilter },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-          avgWorkingHours: { $avg: '$workingHours' }
+        if (startDate || endDate) {
+          matchFilter.date = {};
+          if (startDate) matchFilter.date.$gte = new Date(startDate);
+          if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            matchFilter.date.$lte = end;
+          }
         }
-      }
-    ];
 
-    const departmentPipeline = [
-      { $match: matchFilter },
-      {
-        $lookup: {
-          from: 'employees',
-          localField: 'employee',
-          foreignField: '_id',
-          as: 'employeeDoc'
-        }
-      },
-      { $unwind: '$employeeDoc' },
-      ...(department ? [{ $match: { 'employeeDoc.department': new RegExp(`^${department}$`, 'i') } }] : []),
-      {
-        $group: {
-          _id: {
-            department: '$employeeDoc.department',
-            status: '$status'
+        const summaryPipeline = [
+          { $match: matchFilter },
+          {
+            $group: {
+              _id: '$status',
+              count: { $sum: 1 },
+              avgWorkingHours: { $avg: '$workingHours' }
+            }
+          }
+        ];
+
+        const departmentPipeline = [
+          { $match: matchFilter },
+          {
+            $lookup: {
+              from: 'employees',
+              localField: 'employee',
+              foreignField: '_id',
+              as: 'employeeDoc'
+            }
           },
-          count: { $sum: 1 },
-          totalHours: { $sum: '$workingHours' }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          department: '$_id.department',
-          status: '$_id.status',
-          count: 1,
-          totalHours: { $round: ['$totalHours', 2] }
-        }
+          { $unwind: '$employeeDoc' },
+          ...(department ? [{ $match: { 'employeeDoc.department': new RegExp(`^${department}$`, 'i') } }] : []),
+          {
+            $group: {
+              _id: {
+                department: '$employeeDoc.department',
+                status: '$status'
+              },
+              count: { $sum: 1 },
+              totalHours: { $sum: '$workingHours' }
+            }
+          },
+          {
+            $project: {
+              _id: 0,
+              department: '$_id.department',
+              status: '$_id.status',
+              count: 1,
+              totalHours: { $round: ['$totalHours', 2] }
+            }
+          }
+        ];
+
+        const [statusSummary, departmentSummary] = await Promise.all([
+          Attendance.aggregate(summaryPipeline),
+          Attendance.aggregate(departmentPipeline)
+        ]);
+
+        return {
+          statusSummary,
+          departmentSummary
+        };
       }
-    ];
-
-    const [statusSummary, departmentSummary] = await Promise.all([
-      Attendance.aggregate(summaryPipeline),
-      Attendance.aggregate(departmentPipeline)
-    ]);
-
-    return {
-      statusSummary,
-      departmentSummary
-    };
-  }
 
   /**
    * HR Leave Reports
    */
   async getLeaveReports({ startDate, endDate }) {
-    const matchFilter = {};
+        const matchFilter = {};
 
-    if (startDate || endDate) {
-      matchFilter.startDate = {};
-      if (startDate) matchFilter.startDate.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        matchFilter.startDate.$lte = end;
+        if (startDate || endDate) {
+          matchFilter.startDate = {};
+          if (startDate) matchFilter.startDate.$gte = new Date(startDate);
+          if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            matchFilter.startDate.$lte = end;
+          }
+        }
+
+        const [statusCounts, typeCounts] = await Promise.all([
+          Leave.aggregate([
+            { $match: matchFilter },
+            {
+              $group: {
+                _id: '$status',
+                count: { $sum: 1 }
+              }
+            }
+          ]),
+          Leave.aggregate([
+            { $match: matchFilter },
+            {
+              $group: {
+                _id: '$leaveType',
+                count: { $sum: 1 }
+              }
+            }
+          ])
+        ]);
+
+        return {
+          statusSummary: statusCounts,
+          typeSummary: typeCounts
+        };
       }
-    }
 
-    const [statusCounts, typeCounts] = await Promise.all([
-      Leave.aggregate([
-        { $match: matchFilter },
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 }
-          }
-        }
-      ]),
-      Leave.aggregate([
-        { $match: matchFilter },
-        {
-          $group: {
-            _id: '$leaveType',
-            count: { $sum: 1 }
-          }
-        }
-      ])
-    ]);
-
-    return {
-      statusSummary: statusCounts,
-      typeSummary: typeCounts
-    };
-  }
-
   /**
    * Get Company-Wide Birthdays (Today & Upcoming within specified days)
    * Across BOTH Tech & Telecalling departments.
    * Excludes birth year and sensitive employee data from public staff viewing.
    */
   async getCompanyBirthdays(daysAhead = 30, referenceDate = new Date()) {
-    const Employee = require('../models/Employee');
-    const employees = await Employee.find({
-      status: { $in: ['ACTIVE', 'ON_LEAVE', 'PROBATION', 'active', 'on_leave', 'probation'] },
-      dateOfBirth: { $ne: null }
-    }).select('firstName lastName department designation profileImage dateOfBirth employeeId').lean();
+        const Employee = require('../models/Employee');
+        const employees = await Employee.find({
+          status: { $in: ['ACTIVE', 'ON_LEAVE', 'PROBATION', 'active', 'on_leave', 'probation'] },
+          dateOfBirth: { $ne: null }
+        }).select('firstName lastName department designation profileImage dateOfBirth employeeId').lean();
 
-    const ref = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
-    const currentYear = ref.getFullYear();
-    const currentMonth = ref.getMonth() + 1; // 1-12
-    const currentDay = ref.getDate(); // 1-31
+        const ref = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+        const currentYear = ref.getFullYear();
+        const currentMonth = ref.getMonth() + 1; // 1-12
+        const currentDay = ref.getDate(); // 1-31
 
-    const isLeapYear = (year) => (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+        const isLeapYear = (year) => (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
 
-    const todayBirthdays = [];
-    const upcomingBirthdays = [];
-    const seenIds = new Set();
+        const todayBirthdays = [];
+        const upcomingBirthdays = [];
+        const seenIds = new Set();
 
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-    // Midnight of reference date in local calendar context
-    const todayMidnight = new Date(currentYear, currentMonth - 1, currentDay, 0, 0, 0, 0);
+        // Midnight of reference date in local calendar context
+        const todayMidnight = new Date(currentYear, currentMonth - 1, currentDay, 0, 0, 0, 0);
 
-    for (const emp of employees) {
-      if (!emp.dateOfBirth) continue;
-      const empIdStr = (emp._id || emp.employeeId || '').toString();
-      if (seenIds.has(empIdStr)) continue;
-      seenIds.add(empIdStr);
+        for (const emp of employees) {
+          if (!emp.dateOfBirth) continue;
+          const empIdStr = (emp._id || emp.employeeId || '').toString();
+          if (seenIds.has(empIdStr)) continue;
+          seenIds.add(empIdStr);
 
-      let bMonth, bDay;
-      if (emp.dateOfBirth instanceof Date) {
-        bMonth = emp.dateOfBirth.getUTCMonth() + 1;
-        bDay = emp.dateOfBirth.getUTCDate();
-      } else if (typeof emp.dateOfBirth === 'string') {
-        const parts = emp.dateOfBirth.split('T')[0].split('-');
-        if (parts.length >= 3) {
-          bMonth = parseInt(parts[1], 10);
-          bDay = parseInt(parts[2], 10);
-        } else {
-          const d = new Date(emp.dateOfBirth);
-          if (isNaN(d.getTime())) continue;
-          bMonth = d.getUTCMonth() + 1;
-          bDay = d.getUTCDate();
+          let bMonth, bDay;
+          if (emp.dateOfBirth instanceof Date) {
+            bMonth = emp.dateOfBirth.getUTCMonth() + 1;
+            bDay = emp.dateOfBirth.getUTCDate();
+          } else if (typeof emp.dateOfBirth === 'string') {
+            const parts = emp.dateOfBirth.split('T')[0].split('-');
+            if (parts.length >= 3) {
+              bMonth = parseInt(parts[1], 10);
+              bDay = parseInt(parts[2], 10);
+            } else {
+              const d = new Date(emp.dateOfBirth);
+              if (isNaN(d.getTime())) continue;
+              bMonth = d.getUTCMonth() + 1;
+              bDay = d.getUTCDate();
+            }
+          } else {
+            const d = new Date(emp.dateOfBirth);
+            if (isNaN(d.getTime())) continue;
+            bMonth = d.getUTCMonth() + 1;
+            bDay = d.getUTCDate();
+          }
+
+          if (!bMonth || !bDay || isNaN(bMonth) || isNaN(bDay)) continue;
+
+          // Determine celebrated day in current year:
+          // If born on Feb 29 and current year is non-leap, celebrate on Feb 28
+          let celebratedDayThisYear = bDay;
+          if (bMonth === 2 && bDay === 29 && !isLeapYear(currentYear)) {
+            celebratedDayThisYear = 28;
+          }
+
+          const celebrationDateThisYear = new Date(currentYear, bMonth - 1, celebratedDayThisYear, 0, 0, 0, 0);
+
+          let targetCelebrationDate;
+          let effectiveDay = celebratedDayThisYear;
+
+          if (celebrationDateThisYear.getTime() === todayMidnight.getTime()) {
+            targetCelebrationDate = celebrationDateThisYear;
+            effectiveDay = celebratedDayThisYear;
+          } else if (celebrationDateThisYear > todayMidnight) {
+            targetCelebrationDate = celebrationDateThisYear;
+            effectiveDay = celebratedDayThisYear;
+          } else {
+            // Celebration in current year has passed; next celebration is in currentYear + 1
+            const nextYear = currentYear + 1;
+            let celebratedDayNextYear = bDay;
+            if (bMonth === 2 && bDay === 29 && !isLeapYear(nextYear)) {
+              celebratedDayNextYear = 28;
+            }
+            targetCelebrationDate = new Date(nextYear, bMonth - 1, celebratedDayNextYear, 0, 0, 0, 0);
+            effectiveDay = celebratedDayNextYear;
+          }
+
+          const diffMs = targetCelebrationDate.getTime() - todayMidnight.getTime();
+          const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+          const isToday = (diffDays === 0);
+
+          const fullName = `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || 'Employee';
+
+          const birthdayRecord = {
+            id: (emp._id || emp.employeeId).toString(),
+            employeeId: emp.employeeId || '',
+            name: fullName,
+            department: emp.department || 'Unassigned',
+            designation: emp.designation || '',
+            profileImage: emp.profileImage || null,
+            birthdayFormatted: `${monthNames[bMonth - 1]} ${effectiveDay}`,
+            birthdayMonth: bMonth,
+            birthdayDay: effectiveDay,
+            daysUntil: diffDays,
+            isToday: isToday
+          };
+
+          if (isToday) {
+            todayBirthdays.push(birthdayRecord);
+          } else if (diffDays > 0 && diffDays <= daysAhead) {
+            upcomingBirthdays.push(birthdayRecord);
+          }
         }
-      } else {
-        const d = new Date(emp.dateOfBirth);
-        if (isNaN(d.getTime())) continue;
-        bMonth = d.getUTCMonth() + 1;
-        bDay = d.getUTCDate();
+
+        // Sort upcoming birthdays by daysUntil ascending
+        upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
+        // Sort today's birthdays by name
+        todayBirthdays.sort((a, b) => a.name.localeCompare(b.name));
+
+        return {
+          today: todayBirthdays,
+          upcoming: upcomingBirthdays,
+          totalToday: todayBirthdays.length,
+          totalUpcoming: upcomingBirthdays.length
+        };
       }
-
-      if (!bMonth || !bDay || isNaN(bMonth) || isNaN(bDay)) continue;
-
-      // Determine celebrated day in current year:
-      // If born on Feb 29 and current year is non-leap, celebrate on Feb 28
-      let celebratedDayThisYear = bDay;
-      if (bMonth === 2 && bDay === 29 && !isLeapYear(currentYear)) {
-        celebratedDayThisYear = 28;
-      }
-
-      const celebrationDateThisYear = new Date(currentYear, bMonth - 1, celebratedDayThisYear, 0, 0, 0, 0);
-
-      let targetCelebrationDate;
-      let effectiveDay = celebratedDayThisYear;
-
-      if (celebrationDateThisYear.getTime() === todayMidnight.getTime()) {
-        targetCelebrationDate = celebrationDateThisYear;
-        effectiveDay = celebratedDayThisYear;
-      } else if (celebrationDateThisYear > todayMidnight) {
-        targetCelebrationDate = celebrationDateThisYear;
-        effectiveDay = celebratedDayThisYear;
-      } else {
-        // Celebration in current year has passed; next celebration is in currentYear + 1
-        const nextYear = currentYear + 1;
-        let celebratedDayNextYear = bDay;
-        if (bMonth === 2 && bDay === 29 && !isLeapYear(nextYear)) {
-          celebratedDayNextYear = 28;
-        }
-        targetCelebrationDate = new Date(nextYear, bMonth - 1, celebratedDayNextYear, 0, 0, 0, 0);
-        effectiveDay = celebratedDayNextYear;
-      }
-
-      const diffMs = targetCelebrationDate.getTime() - todayMidnight.getTime();
-      const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-      const isToday = (diffDays === 0);
-
-      const fullName = `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || 'Employee';
-
-      const birthdayRecord = {
-        id: (emp._id || emp.employeeId).toString(),
-        employeeId: emp.employeeId || '',
-        name: fullName,
-        department: emp.department || 'Unassigned',
-        designation: emp.designation || '',
-        profileImage: emp.profileImage || null,
-        birthdayFormatted: `${monthNames[bMonth - 1]} ${effectiveDay}`,
-        birthdayMonth: bMonth,
-        birthdayDay: effectiveDay,
-        daysUntil: diffDays,
-        isToday: isToday
-      };
-
-      if (isToday) {
-        todayBirthdays.push(birthdayRecord);
-      } else if (diffDays > 0 && diffDays <= daysAhead) {
-        upcomingBirthdays.push(birthdayRecord);
-      }
-    }
-
-    // Sort upcoming birthdays by daysUntil ascending
-    upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
-    // Sort today's birthdays by name
-    todayBirthdays.sort((a, b) => a.name.localeCompare(b.name));
-
-    return {
-      today: todayBirthdays,
-      upcoming: upcomingBirthdays,
-      totalToday: todayBirthdays.length,
-      totalUpcoming: upcomingBirthdays.length
-    };
-  }
 
   /**
    * Update employee status (PATCH /api/hr/employees/:id/status)
    */
   async updateEmployeeStatus(id, newStatus) {
-    const validStatuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'];
-    if (!validStatuses.includes(newStatus)) {
-      throw new AppError(`Invalid status '${newStatus}'. Allowed: ${validStatuses.join(', ')}`, 400);
-    }
+        const validStatuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'];
+        if (!validStatuses.includes(newStatus)) {
+          throw new AppError(`Invalid status '${newStatus}'. Allowed: ${validStatuses.join(', ')}`, 400);
+        }
 
-    const employee = await this.getEmployeeById(id);
-    employee.status = newStatus;
-    await employee.save();
+        const employee = await this.getEmployeeById(id);
+        employee.status = newStatus;
+        await employee.save();
 
-    // Sync user active flag
-    if (newStatus === 'ACTIVE') {
-      await User.findByIdAndUpdate(employee.user, { isActive: true });
-    } else {
-      await User.findByIdAndUpdate(employee.user, { isActive: false });
-    }
+        // Sync user active flag
+        if (newStatus === 'ACTIVE') {
+          await User.findByIdAndUpdate(employee.user, { isActive: true });
+        } else {
+          await User.findByIdAndUpdate(employee.user, { isActive: false });
+        }
 
-    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
-  }
+        return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+      }
 
   /**
    * Get Departments & Headcounts (GET /api/hr/departments)
    */
   async getDepartments() {
-    const employees = await Employee.find({ status: { $ne: 'TERMINATED' } }).lean();
+        const employees = await Employee.find({ status: { $ne: 'TERMINATED' } }).lean();
 
-    const techStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tech') || (e.department || '').toLowerCase().includes('engineering'));
-    const teleStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tele') || (e.department || '').toLowerCase().includes('client'));
+        const techStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tech') || (e.department || '').toLowerCase().includes('engineering'));
+        const teleStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tele') || (e.department || '').toLowerCase().includes('client'));
 
-    return [
-      {
-        deptKey: 'tech',
-        title: 'Tech & Engineering',
-        subtitle: 'Frontend, Backend, Infrastructure & QA',
-        staffCount: techStaff.length,
-        activeCount: techStaff.filter(s => s.status === 'ACTIVE').length,
-        leadName: 'Anita Rao (Lead HR / Tech Ops)',
-        icon: 'computer',
-        color: '#2563EB'
-      },
-      {
-        deptKey: 'telecalling',
-        title: 'Telecalling & Client Relations',
-        subtitle: 'Candidate Outreach, Lead Calling & Customer Support',
-        staffCount: teleStaff.length,
-        activeCount: teleStaff.filter(s => s.status === 'ACTIVE').length,
-        leadName: 'Neha Sharma (Operations Senior)',
-        icon: 'headset_mic',
-        color: '#DB2777'
+        const schedules = await DepartmentSchedule.find().lean();
+        const scheduleFor = (departmentNames) => schedules.find(s => departmentNames.some(n => n.toLowerCase() === s.department.toLowerCase())) || null;
+        return [
+          {
+            deptKey: 'tech',
+            title: 'Tech & Engineering',
+            subtitle: 'Frontend, Backend, Infrastructure & QA',
+            staffCount: techStaff.length,
+            activeCount: techStaff.filter(s => s.status === 'ACTIVE').length,
+            leadName: 'Anita Rao (Lead HR / Tech Ops)',
+            icon: 'computer',
+            color: '#2563EB',
+            schedule: scheduleFor([...new Set(techStaff.map(e => e.department))])
+          },
+          {
+            deptKey: 'telecalling',
+            title: 'Telecalling & Client Relations',
+            subtitle: 'Candidate Outreach, Lead Calling & Customer Support',
+            staffCount: teleStaff.length,
+            activeCount: teleStaff.filter(s => s.status === 'ACTIVE').length,
+            leadName: 'Neha Sharma (Operations Senior)',
+            icon: 'headset_mic',
+            color: '#DB2777',
+            schedule: scheduleFor([...new Set(teleStaff.map(e => e.department))])
+          }
+        ];
       }
-    ];
-  }
 
   /**
    * Get Single Department details (GET /api/hr/departments/:deptKey)
    */
   async getDepartmentByKey(deptKey) {
-    const departments = await this.getDepartments();
-    const key = (deptKey || '').toLowerCase();
-    const dept = departments.find(d => d.deptKey === key || d.title.toLowerCase().includes(key));
-    if (!dept) {
-      throw new AppError(`Department '${deptKey}' not found`, 404);
+        const departments = await this.getDepartments();
+        const key = (deptKey || '').toLowerCase();
+        const dept = departments.find(d => d.deptKey === key || d.title.toLowerCase().includes(key));
+        if (!dept) {
+          throw new AppError(`Department '${deptKey}' not found`, 404);
+        }
+        return dept;
+      }
+
+  async setDepartmentSchedule(department, { checkInTime, timeZone, timezone, gracePeriodMinutes = 0 } = {}) {
+    const name = String(department || '').trim();
+    if (!name || name.length > 100) throw new AppError('A valid department key is required', 400);
+    if (typeof checkInTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkInTime)) {
+      throw new AppError('Check-in time must use 24-hour HH:mm format', 400);
     }
-    return dept;
+    const tz = timeZone || timezone;
+    if (typeof tz !== 'string' || !tz.trim()) throw new AppError('IANA time zone is required', 400);
+    if (!Number.isSafeInteger(gracePeriodMinutes) || gracePeriodMinutes < 0) {
+      throw new AppError('Grace period must be a non-negative integer', 400);
+    }
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date());
+    } catch (_) {
+      throw new AppError('Invalid time zone', 400);
+    }
+    const exists = await Employee.exists({ department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    if (!exists) throw new AppError('Department not found', 404);
+    return DepartmentSchedule.findOneAndUpdate(
+      { department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      { $set: { department: name, checkInTime, timeZone: tz, timezone: tz, gracePeriodMinutes } },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    );
   }
+
+  async getDepartmentSchedule(department) {
+        const name = String(department || '').trim();
+        if (!name || name.length > 100) throw new AppError('A valid department key is required', 400);
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const employeeExists = await Employee.exists({ department: new RegExp(`^${escaped}$`, 'i') });
+        if (!employeeExists) throw new AppError('Department not found', 404);
+        return DepartmentSchedule.findOne({ department: new RegExp(`^${escaped}$`, 'i') }).lean();
+      }
 
   /**
    * Create or update a department schedule (effective-date versioned)
    */
   async createDepartmentSchedule({ department, checkInTime, checkOutTime = '18:00', gracePeriodMinutes = 0, timezone = 'Asia/Kolkata', effectiveDate, description = '', user = null }) {
-    if (!department) {
-      throw new AppError('Department is required', 400);
-    }
-    if (!checkInTime) {
-      throw new AppError('Check-in time is required', 400);
-    }
+        if (!department) {
+          throw new AppError('Department is required', 400);
+        }
+        if (!checkInTime) {
+          throw new AppError('Check-in time is required', 400);
+        }
 
-    const effDate = effectiveDate ? new Date(effectiveDate) : new Date();
-    if (isNaN(effDate.getTime())) {
-      throw new AppError('Invalid effective date format', 400);
-    }
+        const effDate = effectiveDate ? new Date(effectiveDate) : new Date();
+        if (isNaN(effDate.getTime())) {
+          throw new AppError('Invalid effective date format', 400);
+        }
 
-    const canonicalDept = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
+        const canonicalDept = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
 
-    const schedule = new DepartmentSchedule({
-      department: canonicalDept,
-      departmentDisplay: department.trim(),
-      checkInTime: checkInTime.trim(),
-      checkOutTime: (checkOutTime || '18:00').trim(),
-      gracePeriodMinutes: Number(gracePeriodMinutes) || 0,
-      timezone: timezone.trim() || 'Asia/Kolkata',
-      effectiveDate: effDate,
-      description: description ? description.trim() : '',
-      createdBy: user ? user._id : null,
-      updatedBy: user ? user._id : null
-    });
+        const schedule = new DepartmentSchedule({
+          department: canonicalDept,
+          departmentDisplay: department.trim(),
+          checkInTime: checkInTime.trim(),
+          checkOutTime: (checkOutTime || '18:00').trim(),
+          gracePeriodMinutes: Number(gracePeriodMinutes) || 0,
+          timezone: timezone.trim() || 'Asia/Kolkata',
+          effectiveDate: effDate,
+          description: description ? description.trim() : '',
+          createdBy: user ? user._id : null,
+          updatedBy: user ? user._id : null
+        });
 
-    await schedule.save();
-    return schedule;
-  }
+        await schedule.save();
+        return schedule;
+      }
 
   /**
    * Get all schedule versions, optionally filtered by department
    */
   async getDepartmentSchedules({ department } = {}) {
-    const filter = {};
-    if (department) {
-      filter.department = department.trim().toUpperCase();
-    }
-    return await DepartmentSchedule.find(filter)
-      .sort({ department: 1, effectiveDate: -1, createdAt: -1 })
-      .populate('createdBy', 'firstName lastName email')
-      .populate('updatedBy', 'firstName lastName email')
-      .lean();
-  }
+        const filter = {};
+        if (department) {
+          filter.department = department.trim().toUpperCase();
+        }
+        return await DepartmentSchedule.find(filter)
+          .sort({ department: 1, effectiveDate: -1, createdAt: -1 })
+          .populate('createdBy', 'firstName lastName email')
+          .populate('updatedBy', 'firstName lastName email')
+          .lean();
+      }
 
   /**
    * Get effective schedule for a department key (along with historical versions)
    */
   async getDepartmentScheduleByKey(deptKey, targetDate = new Date()) {
-    const key = (deptKey || '').trim().toUpperCase();
-    const effectiveSchedule = await DepartmentSchedule.getEffectiveSchedule(key, targetDate);
-    const history = await DepartmentSchedule.find({ department: key })
-      .sort({ effectiveDate: -1, createdAt: -1 })
-      .populate('createdBy', 'firstName lastName email')
-      .lean();
+        const key = (deptKey || '').trim().toUpperCase();
+        const effectiveSchedule = await DepartmentSchedule.getEffectiveSchedule(key, targetDate);
+        const history = await DepartmentSchedule.find({ department: key })
+          .sort({ effectiveDate: -1, createdAt: -1 })
+          .populate('createdBy', 'firstName lastName email')
+          .lean();
 
-    return {
-      department: key,
-      effectiveSchedule,
-      history
-    };
-  }
+        return {
+          department: key,
+          effectiveSchedule,
+          history
+        };
+      }
 
   /**
    * Safe, auditable historical reclassification of attendance records
    */
   async reclassifyHistoricalAttendance({ startDate, endDate, department, dryRun = true, user = null }) {
-    const filter = {};
-    if (startDate || endDate) {
-      filter.date = {};
-      if (startDate) filter.date.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.date.$lte = end;
-      }
-    }
-
-    if (department && department.trim() !== '') {
-      const canonical = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
-      const emps = await Employee.find({
-        $or: [
-          { department: new RegExp(`^${department.trim()}$`, 'i') },
-          { department: new RegExp(`^${canonical}$`, 'i') }
-        ]
-      }).select('_id');
-      filter.employee = { $in: emps.map(e => e._id) };
-    }
-
-    const records = await Attendance.find(filter).populate('employee');
-    const modifications = [];
-
-    for (const record of records) {
-      if (!record.checkIn || !record.employee?.department) continue;
-
-      const schedule = await DepartmentSchedule.getEffectiveSchedule(record.employee.department, record.date);
-      const latenessResult = calculateLateness(record.checkIn, schedule);
-
-      const isChanged = record.isLate !== latenessResult.isLate ||
-                        record.minutesLate !== latenessResult.minutesLate ||
-                        (latenessResult.isLate && record.status !== 'LATE');
-
-      const plan = {
-        attendanceId: record._id,
-        employeeId: record.employee.employeeId,
-        employeeName: `${record.employee.firstName} ${record.employee.lastName}`,
-        department: record.employee.department,
-        date: record.date,
-        checkIn: record.checkIn,
-        current: {
-          status: record.status,
-          isLate: record.isLate,
-          minutesLate: record.minutesLate
-        },
-        proposed: {
-          status: latenessResult.isLate ? 'LATE' : record.status,
-          isLate: latenessResult.isLate,
-          minutesLate: latenessResult.minutesLate,
-          scheduleStatus: latenessResult.scheduleStatus,
-          scheduleSnapshot: latenessResult.scheduleSnapshot
-        },
-        isChanged
-      };
-
-      modifications.push(plan);
-
-      if (!dryRun && isChanged) {
-        record.isLate = latenessResult.isLate;
-        record.minutesLate = latenessResult.minutesLate;
-        record.scheduleStatus = latenessResult.scheduleStatus;
-        record.scheduleSnapshot = latenessResult.scheduleSnapshot;
-        if (latenessResult.isLate) {
-          record.status = 'LATE';
+        const filter = {};
+        if (startDate || endDate) {
+          filter.date = {};
+          if (startDate) filter.date.$gte = new Date(startDate);
+          if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            filter.date.$lte = end;
+          }
         }
-        await record.save();
+
+        if (department && department.trim() !== '') {
+          const canonical = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
+          const emps = await Employee.find({
+            $or: [
+              { department: new RegExp(`^${department.trim()}$`, 'i') },
+              { department: new RegExp(`^${canonical}$`, 'i') }
+            ]
+          }).select('_id');
+          filter.employee = { $in: emps.map(e => e._id) };
+        }
+
+        const records = await Attendance.find(filter).populate('employee');
+        const modifications = [];
+
+        for (const record of records) {
+          if (!record.checkIn || !record.employee?.department) continue;
+
+          const schedule = await DepartmentSchedule.getEffectiveSchedule(record.employee.department, record.date);
+          const latenessResult = calculateLateness(record.checkIn, schedule);
+
+          const isChanged = record.isLate !== latenessResult.isLate ||
+            record.minutesLate !== latenessResult.minutesLate ||
+            (latenessResult.isLate && record.status !== 'LATE');
+
+          const plan = {
+            attendanceId: record._id,
+            employeeId: record.employee.employeeId,
+            employeeName: `${record.employee.firstName} ${record.employee.lastName}`,
+            department: record.employee.department,
+            date: record.date,
+            checkIn: record.checkIn,
+            current: {
+              status: record.status,
+              isLate: record.isLate,
+              minutesLate: record.minutesLate
+            },
+            proposed: {
+              status: latenessResult.isLate ? 'LATE' : record.status,
+              isLate: latenessResult.isLate,
+              minutesLate: latenessResult.minutesLate,
+              scheduleStatus: latenessResult.scheduleStatus,
+              scheduleSnapshot: latenessResult.scheduleSnapshot
+            },
+            isChanged
+          };
+
+          modifications.push(plan);
+
+          if (!dryRun && isChanged) {
+            record.isLate = latenessResult.isLate;
+            record.minutesLate = latenessResult.minutesLate;
+            record.scheduleStatus = latenessResult.scheduleStatus;
+            record.scheduleSnapshot = latenessResult.scheduleSnapshot;
+            if (latenessResult.isLate) {
+              record.status = 'LATE';
+            }
+            await record.save();
+          }
+        }
+
+        return {
+          dryRun,
+          totalScanned: records.length,
+          changedCount: modifications.filter(m => m.isChanged).length,
+          modifications
+        };
       }
     }
 
-    return {
-      dryRun,
-      totalScanned: records.length,
-      changedCount: modifications.filter(m => m.isChanged).length,
-      modifications
-    };
-  }
-}
-
-module.exports = new HRService();
+    module.exports = new HRService();
 

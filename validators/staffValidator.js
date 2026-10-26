@@ -253,6 +253,10 @@ const dailyUpdateValidator = [
     }
     next();
   },
+  body('title')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 200 }).withMessage('Title cannot exceed 200 characters'),
   body('updateText')
     .trim()
     .notEmpty().withMessage('Update text is required')
