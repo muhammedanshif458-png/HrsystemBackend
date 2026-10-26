@@ -12,9 +12,9 @@
     "test:attendance": "node scripts/verifyAttendanceSchedule.js && node scripts/verifyAttendanceIntegration.js",
     "test:birthdays": "node scripts/verifyBirthdays.js",
     "test:staff-update": "node scripts/verifyStaffUpdateLive.js",
-    "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js"
+    "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js",
+    "test:dashboard-attendance": "node scripts/verifyDashboardAttendanceMetrics.js"
   },
-
   "keywords": [
     "hr",
     "management",

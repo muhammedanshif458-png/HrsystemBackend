@@ -211,6 +211,7 @@ class StaffService {
       employee: employee._id,
       date,
       checkIn,
+      workMode: employee.workMode || null,
       status: 'PRESENT',
       ...classification,
       isLate,
