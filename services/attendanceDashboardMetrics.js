@@ -15,7 +15,7 @@ function summarizeAttendanceDay({ activeEmployeeIds, attendanceRows, approvedLea
     date: dateKey,
     todayPresent: presentRows.length,
     todayAbsent: uniqueRows.filter(row => row.status === 'ABSENT').length,
-    lateArrivals: uniqueRows.filter(row => row.late === true && row.checkIn != null).length,
+    lateArrivals: uniqueRows.filter(row => (row.late === true || row.isLate === true || row.status === 'LATE') && row.checkIn != null).length,
     onLeaveToday: [...onLeaveIds].filter(id => activeIds.has(id)).length,
     todayWfh: presentRows.filter(row => (row.workMode || row.employee?.workMode || '').toUpperCase() === 'WFH').length
   };

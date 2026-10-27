@@ -23,7 +23,11 @@ class HRService {
       Employee.countDocuments({ status: 'ACTIVE' }),
       Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
       Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
-      Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } }).select('employee status late checkIn workMode createdAt').populate('employee', 'status workMode').sort({ checkIn: -1, createdAt: -1 }).lean(),
+      Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } })
+        .select('employee status late isLate checkIn workMode createdAt')
+        .populate('employee', 'status workMode')
+        .sort({ checkIn: -1, createdAt: -1 })
+        .lean(),
       Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
       Leave.countDocuments({ status: 'PENDING' }),
       Leave.countDocuments({ status: 'APPROVED' })
@@ -36,6 +40,7 @@ class HRService {
     });
     return {
       totalEmployees, activeEmployees, inactiveEmployees, ...metrics,
+      todayLate: metrics.lateArrivals,
       pendingLeaves, approvedLeaves
     };
   }
@@ -483,7 +488,7 @@ return {
   /**
    * Get attendance records for HR
    */
-  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, status, department, search, workMode }) {
+  async getAttendance({ page = 1, limit = 20, employeeId, startDate, endDate, date, status, department, search, workMode }) {
   page = Math.max(1, parseInt(page, 10));
   limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
   const skip = (page - 1) * limit;
@@ -566,10 +571,13 @@ return {
     filter.status = status;
   }
 
-  if (startDate || endDate) {
+  const effectiveStartDate = startDate || date;
+  const effectiveEndDate = endDate || date;
+
+  if (effectiveStartDate || effectiveEndDate) {
     filter.date = {};
-    if (startDate) filter.date.$gte = getDayBounds(startDate).startOfDay;
-    if (endDate) filter.date.$lte = getDayBounds(endDate).endOfDay;
+    if (effectiveStartDate) filter.date.$gte = getDayBounds(effectiveStartDate).startOfDay;
+    if (effectiveEndDate) filter.date.$lte = getDayBounds(effectiveEndDate).endOfDay;
   }
 
   let rawAttendance;
@@ -587,7 +595,7 @@ return {
       .lean();
 
     // If no explicit date range was supplied, restrict to current workday per schedule timezone
-    const currentWorkdayRows = (!startDate && !endDate)
+    const currentWorkdayRows = (!effectiveStartDate && !effectiveEndDate)
       ? lateRows.filter(row => isAttendanceForCurrentWorkday(row))
       : lateRows;
 
@@ -610,29 +618,32 @@ return {
 
     const attendance = await Promise.all(
       rawAttendance.map(async (rec) => {
-        const isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
-        let minutesLate = rec.minutesLate || 0;
         let snapshot = rec.scheduleSnapshot;
-
-        if (isLateRec && minutesLate === 0 && rec.checkIn) {
-          if (!snapshot && rec.employee?.department) {
-            const effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, rec.date);
-            if (effSched) {
-              snapshot = {
-                scheduleId: effSched._id,
-                department: effSched.department,
-                scheduledCheckIn: effSched.checkInTime,
-                scheduledCheckOut: effSched.checkOutTime || '18:00',
-                gracePeriodMinutes: effSched.gracePeriodMinutes || 0,
-                timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
-              };
-            }
-          }
-          if (snapshot && snapshot.scheduledCheckIn) {
-            const calc = calculateLateness(new Date(rec.checkIn), snapshot);
-            minutesLate = calc.minutesLate;
+        if (!snapshot && rec.employee?.department) {
+          const effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, rec.date || rec.checkIn || new Date());
+          if (effSched) {
+            snapshot = {
+              scheduleId: effSched._id,
+              department: effSched.department,
+              scheduledCheckIn: effSched.checkInTime,
+              scheduledCheckOut: effSched.checkOutTime || '18:00',
+              gracePeriodMinutes: effSched.gracePeriodMinutes || 0,
+              timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
+            };
           }
         }
+
+        const isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
+        let minutesLate = rec.minutesLate || 0;
+
+        if (isLateRec && minutesLate === 0 && rec.checkIn && snapshot?.scheduledCheckIn) {
+          const calc = calculateLateness(new Date(rec.checkIn), snapshot);
+          minutesLate = calc.minutesLate;
+        }
+
+        const scheduledCheckIn = rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null;
+        const scheduleTimeZone = rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null;
+        const scheduleConfigured = Boolean(rec.scheduleConfigured || rec.scheduleStatus === 'CONFIGURED' || scheduledCheckIn || snapshot);
 
         const workingHoursNum = Number(rec.workingHours) || 0;
         const workedHoursInt = Math.floor(workingHoursNum);
@@ -669,10 +680,12 @@ return {
           isLate: isLateRec,
           late: isLateRec,
           minutesLate,
-          scheduledCheckIn: rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null,
+          scheduleConfigured,
+          scheduleStatus: scheduleConfigured ? 'CONFIGURED' : (rec.scheduleStatus || 'UNCONFIGURED'),
+          scheduledCheckIn,
           scheduledCheckOut: snapshot?.scheduledCheckOut || snapshot?.checkOutTime || null,
-          scheduleTimeZone: rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null,
-          timezone: rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null,
+          scheduleTimeZone,
+          timezone: scheduleTimeZone,
           gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : (typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : 0),
           scheduleSnapshot: snapshot || rec.scheduleSnapshot || null,
           department: rec.employee?.department || rec.scheduleSnapshot?.department || null
@@ -1220,6 +1233,7 @@ return {
       checkOutTime: (checkOutTime || '18:00').trim(),
       gracePeriodMinutes: Number(gracePeriodMinutes) || 0,
       timezone: timezone.trim() || 'Asia/Kolkata',
+      timeZone: timezone.trim() || 'Asia/Kolkata',
       effectiveDate: effDate,
       description: description ? description.trim() : '',
       createdBy: user ? user._id : null,
