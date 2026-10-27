@@ -67,11 +67,15 @@ class StaffController {
 
   /**
    * POST /api/staff/attendance/break-start
+   * POST /api/staff/attendance/:attendanceId/breaks/start
    */
   async startBreak(req, res, next) {
     try {
-      const attendance = await staffService.startBreak(req.user, req.body);
-      return sendSuccess(res, 'Break started successfully', attendance, 200);
+      const result = await staffService.startBreak(req.user, {
+        ...req.body,
+        attendanceId: req.params.attendanceId
+      });
+      return sendSuccess(res, 'Break started successfully', result, 200);
     } catch (err) {
       next(err);
     }
@@ -79,11 +83,15 @@ class StaffController {
 
   /**
    * POST /api/staff/attendance/break-end
+   * POST /api/staff/attendance/:attendanceId/breaks/end
    */
   async endBreak(req, res, next) {
     try {
-      const attendance = await staffService.endBreak(req.user, req.body);
-      return sendSuccess(res, 'Break ended successfully', attendance, 200);
+      const result = await staffService.endBreak(req.user, {
+        ...req.body,
+        attendanceId: req.params.attendanceId
+      });
+      return sendSuccess(res, 'Break ended successfully', result, 200);
     } catch (err) {
       next(err);
     }

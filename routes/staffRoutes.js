@@ -49,6 +49,8 @@ router.post('/attendance/break/start', breakStartValidator, staffController.star
 router.post('/attendance/break/end', breakEndValidator, staffController.endBreak);
 router.post('/attendance/breaks/start', breakStartValidator, staffController.startBreak);
 router.post('/attendance/breaks/end', breakEndValidator, staffController.endBreak);
+router.post('/attendance/:attendanceId/breaks/start', breakStartValidator, staffController.startBreak);
+router.post('/attendance/:attendanceId/breaks/end', breakEndValidator, staffController.endBreak);
 router.get('/attendance', staffController.getAttendance);
 
 // Leaves

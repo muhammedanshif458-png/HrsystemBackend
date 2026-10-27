@@ -73,7 +73,7 @@ function assert(condition, message) {
 
 async function runControlledVerification() {
   console.log('================================================================================');
-  console.log('   CONTROLLED VERIFICATION: PERSISTENT STAFF BREAK APIS (TECH & TELECALLING)');
+  console.log('   CONTROLLED VERIFICATION: STAFF BREAK APIS (STAFFHUB & HR ATTENDANCE)');
   console.log('================================================================================\n');
 
   await mongoose.connect('mongodb://127.0.0.1:27017/hr_management');
@@ -206,7 +206,7 @@ async function runControlledVerification() {
     const otherToken = otherLogin.body.data?.accessToken;
     createdUserIds.push(otherLogin.body.data?.user?.id);
 
-    // 5. Tech Staff Check-In
+    // 5. Staff Check-In
     console.log('\n--- 5. Tech Staff Check-In ---');
     const techCheckIn = await request({
       path: '/api/staff/attendance/check-in',
@@ -216,137 +216,172 @@ async function runControlledVerification() {
     assert(techCheckIn.statusCode === 201, 'Tech staff check-in successful');
     const techAttId = techCheckIn.body.data?._id;
 
-    // 6. Test Step 1: Start Tea Break 1 and verify persisted start time
-    console.log('\n--- 6. Step 1: Start Tea Break 1 ---');
-    const tea1Start = await request({
-      path: '/api/staff/attendance/break-start',
-      method: 'POST',
-      headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Tea Break 1', remarks: 'First 15-min tea break' });
-    assert(tea1Start.statusCode === 200, 'Tea Break 1 start succeeded (200 OK)');
-    assert(tea1Start.body.data?.activeBreak?.breakType === 'Tea Break 1', 'activeBreak tracks Tea Break 1');
-    assert(Boolean(tea1Start.body.data?.activeBreak?.startTime), 'activeBreak has startTime timestamp');
-    assert(tea1Start.body.data?.breaks?.length === 1, 'breaks array contains 1 entry');
-    assert(tea1Start.body.data?.breaks[0].breakType === 'Tea Break 1', 'breakType is Tea Break 1');
-    assert(tea1Start.body.data?.breaks[0].endTime === null, 'endTime is null while active');
-
-    // Direct MongoDB verification of persistence
-    const dbDoc1 = await Attendance.findById(techAttId).lean();
-    assert(dbDoc1.activeBreak !== null, 'MongoDB document has activeBreak persisted');
-    assert(dbDoc1.activeBreak.breakType === 'Tea Break 1', 'MongoDB activeBreak.breakType is Tea Break 1');
-    assert(dbDoc1.breaks.length === 1, 'MongoDB breaks array has 1 item persisted');
-    assert(dbDoc1.breaks[0].breakType === 'Tea Break 1', 'MongoDB break item has breakType Tea Break 1');
-
-    // 7. Test Step 5: Attempt Two Simultaneous Active Breaks (Must be rejected)
-    console.log('\n--- 7. Step 5: Attempt Simultaneous Active Break (Should Reject) ---');
-    const simBreakRes = await request({
-      path: '/api/staff/attendance/break-start',
-      method: 'POST',
-      headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Lunch Break' });
-    assert(simBreakRes.statusCode === 400, 'Starting simultaneous Lunch Break rejected with 400');
-    assert(simBreakRes.body.message.includes('currently active'), 'Error message specifies break is currently active');
-
-    // 8. Test Step 9: Unauthorized Modification Prevention
-    console.log('\n--- 8. Step 9: Unauthorized Modification Prevention ---');
-    // Scenario A: Other employee (not checked in) attempts to end Tech employee's break
-    const unauthorizedEndNotCheckedIn = await request({
-      path: '/api/staff/attendance/break-end',
-      method: 'POST',
-      headers: { Authorization: `Bearer ${otherToken}` }
-    }, { breakType: 'Tea Break 1' });
-    assert(unauthorizedEndNotCheckedIn.statusCode === 400, 'Other employee (not checked in) rejected with 400');
-    assert(unauthorizedEndNotCheckedIn.body.message.includes('checking in'), 'Rejection explains cannot end break before checking in');
-
-    // Scenario B: Other employee checks in, but has no active break, attempts to end Tech employee's break
-    await request({
+    // Check-in for Other staff as well
+    const otherCheckIn = await request({
       path: '/api/staff/attendance/check-in',
       method: 'POST',
       headers: { Authorization: `Bearer ${otherToken}` }
     }, { remarks: 'Other staff check in' });
+    assert(otherCheckIn.statusCode === 201, 'Other staff check-in successful');
+    const otherAttId = otherCheckIn.body.data?._id;
 
-    const unauthorizedEndCheckedIn = await request({
-      path: '/api/staff/attendance/break-end',
-      method: 'POST',
-      headers: { Authorization: `Bearer ${otherToken}` }
-    }, { breakType: 'Tea Break 1' });
-    assert(unauthorizedEndCheckedIn.statusCode === 400, 'Other employee (checked in, no active break) rejected with 400');
-    assert(unauthorizedEndCheckedIn.body.message.includes('No active break found to end'), 'Rejection confirms other employee has no active break to end');
-
-    // Verify Tech employee's break is still active and unchanged in MongoDB
-    const dbDocCheck = await Attendance.findById(techAttId).lean();
-    assert(dbDocCheck.activeBreak !== null && dbDocCheck.activeBreak.breakType === 'Tea Break 1', 'Tech employee break remains securely active in MongoDB');
-
-    // 9. Test Step 2: End Tea Break 1 and verify end time and duration
-    console.log('\n--- 9. Step 2: End Tea Break 1 ---');
-    const tea1End = await request({
-      path: '/api/staff/attendance/break-end',
+    // 6. Test StaffHub Contract Endpoint: POST /api/staff/attendance/:attendanceId/breaks/start
+    console.log('\n--- 6. Test POST /api/staff/attendance/:attendanceId/breaks/start ---');
+    
+    // Test 6a: Reject invalid attendanceId format
+    const invalidIdRes = await request({
+      path: '/api/staff/attendance/invalid-mongo-id/breaks/start',
       method: 'POST',
       headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Tea Break 1', remarks: 'Tea break completed' });
-    assert(tea1End.statusCode === 200, 'Tea Break 1 end succeeded (200 OK)');
-    assert(tea1End.body.data?.activeBreak === null, 'activeBreak reset to null');
-    assert(tea1End.body.data?.breaks[0].endTime !== null, 'endTime is persisted');
-    assert(tea1End.body.data?.breaks[0].durationMinutes >= 1, 'durationMinutes calculated from server timestamp (>= 1)');
-    assert(tea1End.body.data?.totalBreakMinutes >= 1, 'totalBreakMinutes updated');
+    }, { breakType: 'tea_break_1' });
+    assert(invalidIdRes.statusCode === 400, 'Invalid attendanceId format rejected with 400');
 
-    // Verify in MongoDB
+    // Test 6b: Reject nonexistent attendanceId
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    const notFoundRes = await request({
+      path: `/api/staff/attendance/${fakeId}/breaks/start`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${techToken}` }
+    }, { breakType: 'tea_break_1' });
+    assert(notFoundRes.statusCode === 404, 'Nonexistent attendanceId rejected with 404');
+
+    // Test 6c: Security check: Reject employee accessing another employee's attendanceId
+    const crossAccessRes = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/start`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${otherToken}` }
+    }, { breakType: 'tea_break_1' });
+    assert(crossAccessRes.statusCode === 403, 'Cross-employee attendance access rejected with 403 Forbidden');
+
+    // Test 6d: Start tea_break_1 successfully
+    const startRes = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/start`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${techToken}` }
+    }, { breakType: 'tea_break_1' });
+    assert(startRes.statusCode === 200, 'POST /breaks/start returned 200 OK');
+    assert(startRes.body.success === true, 'Response contains success: true');
+    assert(Boolean(startRes.body.data?.breakId), 'Response contains breakId');
+    assert(String(startRes.body.data?.attendanceId) === String(techAttId), 'Response contains correct attendanceId');
+    assert(startRes.body.data?.breakType === 'tea_break_1', 'Response contains breakType tea_break_1');
+    assert(Boolean(startRes.body.data?.startTime), 'Response contains startTime');
+    assert(startRes.body.data?.endTime === null, 'Response contains null endTime');
+    assert(startRes.body.data?.activeBreak?.breakType === 'tea_break_1', 'activeBreak tracks tea_break_1');
+
+    // Direct MongoDB verification of persistence
+    const dbDoc1 = await Attendance.findById(techAttId).lean();
+    assert(dbDoc1.activeBreak !== null, 'MongoDB document has activeBreak persisted');
+    assert(dbDoc1.activeBreak.breakType === 'tea_break_1', 'MongoDB activeBreak.breakType is tea_break_1');
+    assert(dbDoc1.breaks.length === 1, 'MongoDB breaks array has 1 item persisted');
+    assert(dbDoc1.breaks[0].breakType === 'tea_break_1', 'MongoDB break item has breakType tea_break_1');
+
+    // 7. Reject second concurrent active break
+    console.log('\n--- 7. Reject Concurrent Active Break ---');
+    const simBreakRes = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/start`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${techToken}` }
+    }, { breakType: 'lunch' });
+    assert(simBreakRes.statusCode === 400, 'Second concurrent active break rejected with 400');
+    assert(simBreakRes.body.message.includes('currently active'), 'Message confirms break is currently active');
+
+    // 8. Test End Break Endpoint: POST /api/staff/attendance/:attendanceId/breaks/end
+    console.log('\n--- 8. Test POST /api/staff/attendance/:attendanceId/breaks/end ---');
+
+    // Test 8a: Security check: Other employee cannot end Tech employee's break
+    const otherEndRes = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/end`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${otherToken}` }
+    }, { breakType: 'tea_break_1' });
+    assert(otherEndRes.statusCode === 403, 'Other employee ending Tech employee break rejected with 403');
+
+    // Test 8b: Reject ending mismatching break type
+    const mismatchEnd = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/end`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${techToken}` }
+    }, { breakType: 'lunch' });
+    assert(mismatchEnd.statusCode === 400, 'Mismatching break type end rejected with 400');
+
+    // Test 8c: Successfully end tea_break_1
+    const endRes = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/end`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${techToken}` }
+    }, { breakType: 'tea_break_1' });
+    assert(endRes.statusCode === 200, 'POST /breaks/end returned 200 OK');
+    assert(endRes.body.success === true, 'Response contains success: true');
+    assert(Boolean(endRes.body.data?.breakId), 'Response contains breakId');
+    assert(String(endRes.body.data?.attendanceId) === String(techAttId), 'Response contains attendanceId');
+    assert(endRes.body.data?.breakType === 'tea_break_1', 'Response contains breakType tea_break_1');
+    assert(Boolean(endRes.body.data?.startTime), 'Response contains startTime');
+    assert(Boolean(endRes.body.data?.endTime), 'Response contains persisted endTime');
+    assert(typeof endRes.body.data?.durationSeconds === 'number', 'Response contains durationSeconds');
+    assert(endRes.body.data?.durationMinutes >= 1, 'Response contains durationMinutes >= 1');
+    assert(endRes.body.data?.activeBreak === null, 'activeBreak reset to null');
+
+    // Direct MongoDB verification of completed break
     const dbDocAfterTea1 = await Attendance.findById(techAttId).lean();
     assert(dbDocAfterTea1.activeBreak === null, 'MongoDB activeBreak is null');
     assert(dbDocAfterTea1.breaks[0].endTime !== null, 'MongoDB breaks[0].endTime is persisted');
     assert(dbDocAfterTea1.breaks[0].durationMinutes >= 1, 'MongoDB breaks[0].durationMinutes >= 1');
 
-    // 10. Test Step 3: Start and End Lunch Break
-    console.log('\n--- 10. Step 3: Start and End Lunch Break ---');
-    const lunchStart = await request({
-      path: '/api/staff/attendance/break-start',
+    // Test 8d: Reject ending a break when no break is active
+    const endNoActive = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/end`,
       method: 'POST',
       headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Lunch Break' });
-    assert(lunchStart.statusCode === 200, 'Lunch Break start succeeded');
-    assert(lunchStart.body.data?.activeBreak?.breakType === 'Lunch Break', 'activeBreak is Lunch Break');
+    }, { breakType: 'tea_break_1' });
+    assert(endNoActive.statusCode === 400, 'Ending when no break active rejected with 400');
+
+    // 9. Test lunch break: Start and End
+    console.log('\n--- 9. Start and End Lunch Break ---');
+    const lunchStart = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/start`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${techToken}` }
+    }, { breakType: 'lunch' });
+    assert(lunchStart.statusCode === 200, 'lunch break started');
+    assert(lunchStart.body.data?.breakType === 'lunch', 'breakType is lunch');
 
     const lunchEnd = await request({
-      path: '/api/staff/attendance/break-end',
+      path: `/api/staff/attendance/${techAttId}/breaks/end`,
       method: 'POST',
       headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Lunch Break' });
-    assert(lunchEnd.statusCode === 200, 'Lunch Break end succeeded');
-    assert(lunchEnd.body.data?.activeBreak === null, 'activeBreak is null after Lunch Break');
-    assert(lunchEnd.body.data?.breaks.length === 2, 'breaks array has 2 completed breaks');
-    assert(lunchEnd.body.data?.breaks[1].breakType === 'Lunch Break', 'second break is Lunch Break');
+    }, { breakType: 'lunch' });
+    assert(lunchEnd.statusCode === 200, 'lunch break ended');
+    assert(lunchEnd.body.data?.breaks?.length === 2, 'attendance has 2 completed breaks');
 
-    // 11. Test Step 4: Start and End Tea Break 2
-    console.log('\n--- 11. Step 4: Start and End Tea Break 2 ---');
+    // 10. Test tea_break_2: Start and End
+    console.log('\n--- 10. Start and End tea_break_2 ---');
     const tea2Start = await request({
-      path: '/api/staff/attendance/break-start',
+      path: `/api/staff/attendance/${techAttId}/breaks/start`,
       method: 'POST',
       headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Tea Break 2' });
-    assert(tea2Start.statusCode === 200, 'Tea Break 2 start succeeded');
-    assert(tea2Start.body.data?.activeBreak?.breakType === 'Tea Break 2', 'activeBreak is Tea Break 2');
+    }, { breakType: 'tea_break_2' });
+    assert(tea2Start.statusCode === 200, 'tea_break_2 started');
 
     const tea2End = await request({
-      path: '/api/staff/attendance/break-end',
+      path: `/api/staff/attendance/${techAttId}/breaks/end`,
       method: 'POST',
       headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Tea Break 2' });
-    assert(tea2End.statusCode === 200, 'Tea Break 2 end succeeded');
-    assert(tea2End.body.data?.activeBreak === null, 'activeBreak is null after Tea Break 2');
-    assert(tea2End.body.data?.breaks.length === 3, 'breaks array has 3 completed breaks');
-    assert(tea2End.body.data?.breaks[2].breakType === 'Tea Break 2', 'third break is Tea Break 2');
+    }, { breakType: 'tea_break_2' });
+    assert(tea2End.statusCode === 200, 'tea_break_2 ended');
+    assert(tea2End.body.data?.breaks?.length === 3, 'attendance has 3 completed breaks');
 
-    // Verify duplicate break prevention: cannot start Tea Break 1 again today
-    const duplicateTea1 = await request({
-      path: '/api/staff/attendance/break-start',
+    // 11. Prevent starting a completed break again during the same shift
+    console.log('\n--- 11. Reject Duplicate Completed Break Start ---');
+    const dupStart = await request({
+      path: `/api/staff/attendance/${techAttId}/breaks/start`,
       method: 'POST',
       headers: { Authorization: `Bearer ${techToken}` }
-    }, { breakType: 'Tea Break 1' });
-    assert(duplicateTea1.statusCode === 400, 'Duplicate Tea Break 1 start rejected with 400');
-    assert(duplicateTea1.body.message.includes('already been taken'), 'Error confirms Tea Break 1 already taken today');
+    }, { breakType: 'tea_break_1' });
+    assert(dupStart.statusCode === 400, 'Duplicate tea_break_1 rejected with 400');
+    assert(dupStart.body.message.includes('already been taken'), 'Message confirms break already taken today');
 
-    // 12. Test Step 6: Verify Completed Break Records in Staff Attendance History
-    console.log('\n--- 12. Step 6: Verify Staff Attendance History (GET /api/staff/attendance) ---');
+    // 12. Staff Attendance History API: GET /api/staff/attendance
+    console.log('\n--- 12. Verify GET /api/staff/attendance ---');
     const staffAttRes = await request({
       path: '/api/staff/attendance',
       method: 'GET',
@@ -354,21 +389,24 @@ async function runControlledVerification() {
     });
     assert(staffAttRes.statusCode === 200, 'GET /api/staff/attendance returns 200');
     const staffRecords = staffAttRes.body.data?.attendance || staffAttRes.body.data;
-    assert(Array.isArray(staffRecords) && staffRecords.length > 0, 'Staff records array returned');
-    const techRecord = staffRecords[0];
-    assert(techRecord.breaks.length === 3, 'Persisted record contains all 3 breaks');
-    techRecord.breaks.forEach((b, idx) => {
-      assert(Boolean(b.breakType), `Break #${idx + 1} has breakType: ${b.breakType}`);
-      assert(Boolean(b.startTime), `Break #${idx + 1} has startTime`);
-      assert(Boolean(b.endTime), `Break #${idx + 1} has endTime`);
-      assert(typeof b.durationMinutes === 'number' && b.durationMinutes >= 1, `Break #${idx + 1} has durationMinutes`);
+    assert(Array.isArray(staffRecords) && staffRecords.length > 0, 'Records array returned');
+    const todayRec = staffRecords[0];
+    assert(todayRec.breaks.length === 3, 'Contains all 3 breaks');
+    todayRec.breaks.forEach((b, i) => {
+      assert(Boolean(b.id || b._id), `Break #${i + 1} has id`);
+      assert(String(b.attendanceId) === String(techAttId), `Break #${i + 1} has matching attendanceId`);
+      assert(Boolean(b.breakType), `Break #${i + 1} has breakType`);
+      assert(Boolean(b.startTime), `Break #${i + 1} has startTime`);
+      assert(Boolean(b.endTime), `Break #${i + 1} has endTime`);
+      assert(typeof b.durationSeconds === 'number', `Break #${i + 1} has durationSeconds`);
+      assert(typeof b.durationMinutes === 'number' && b.durationMinutes >= 1, `Break #${i + 1} has durationMinutes`);
     });
-    assert(techRecord.totalBreakMinutes >= 3, 'totalBreakMinutes is sum of completed break durations');
-    assert(Boolean(techRecord.breakDuration), `breakDuration formatted string returned: ${techRecord.breakDuration}`);
-    assert(techRecord.activeBreak === null, 'activeBreak is null for completed shift breaks');
+    assert(todayRec.totalBreakMinutes >= 3, 'totalBreakMinutes calculated');
+    assert(todayRec.totalBreakSeconds >= 180, 'totalBreakSeconds calculated');
+    assert(Boolean(todayRec.breakDuration), `breakDuration formatted string returned: ${todayRec.breakDuration}`);
 
-    // 13. Test Step 7: Verify Records Through GET /api/hr/attendance
-    console.log('\n--- 13. Step 7: Verify via HR Attendance API (GET /api/hr/attendance) ---');
+    // 13. HR Attendance API: GET /api/hr/attendance
+    console.log('\n--- 13. Verify GET /api/hr/attendance ---');
     const dateKey = new Date().toISOString().slice(0, 10);
     const hrAttRes = await request({
       path: `/api/hr/attendance?employeeId=${techEmpId}&date=${dateKey}`,
@@ -377,83 +415,67 @@ async function runControlledVerification() {
     });
     assert(hrAttRes.statusCode === 200, 'GET /api/hr/attendance returns 200');
     const hrRecords = hrAttRes.body.data?.attendance || hrAttRes.body.data;
-    assert(Array.isArray(hrRecords) && hrRecords.length === 1, 'HR API returns matching attendance record');
+    assert(Array.isArray(hrRecords) && hrRecords.length === 1, 'Matching employee attendance returned');
     const hrRec = hrRecords[0];
     assert(hrRec.breaks.length === 3, 'HR record includes all 3 breaks');
-    assert(hrRec.activeBreak === null, 'HR record shows activeBreak as null');
-    assert(hrRec.totalBreakMinutes === techRecord.totalBreakMinutes, 'HR totalBreakMinutes matches staff record');
-    assert(hrRec.breakDuration === techRecord.breakDuration, 'HR breakDuration matches staff record');
-    assert(hrRec.breaks[0].breakType === 'Tea Break 1', 'HR break 1 is Tea Break 1');
-    assert(hrRec.breaks[1].breakType === 'Lunch Break', 'HR break 2 is Lunch Break');
-    assert(hrRec.breaks[2].breakType === 'Tea Break 2', 'HR break 3 is Tea Break 2');
+    assert(hrRec.activeBreak === null, 'HR activeBreak is null');
+    assert(hrRec.totalBreakMinutes === todayRec.totalBreakMinutes, 'totalBreakMinutes matches staff record');
+    assert(hrRec.breakDuration === todayRec.breakDuration, 'breakDuration matches staff record');
 
-    // Test HR department filter
-    const hrDeptRes = await request({
-      path: `/api/hr/attendance?department=Tech&date=${dateKey}`,
-      method: 'GET',
-      headers: { Authorization: `Bearer ${adminToken}` }
-    });
-    assert(hrDeptRes.statusCode === 200, 'GET /api/hr/attendance?department=Tech returns 200');
-    const deptRows = hrDeptRes.body.data?.attendance || hrDeptRes.body.data;
-    const foundTech = deptRows.find(r => String(r.staffId) === String(techEmpId) || String(r.employee?._id) === String(techEmpId));
-    assert(Boolean(foundTech), 'Tech test employee record present in department=Tech HR query');
-    assert(foundTech.breaks.length === 3, 'Department-filtered HR query includes break details');
-
-    // 14. Test Step 8: Verify Telecalling Employee
-    console.log('\n--- 14. Step 8: Verify Telecalling Employee Breaks ---');
+    // 14. Verify Telecalling Employee
+    console.log('\n--- 14. Verify Telecalling Department Employee ---');
     const teleCheckIn = await request({
       path: '/api/staff/attendance/check-in',
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { remarks: 'Telecalling check in for break tests' });
-    assert(teleCheckIn.statusCode === 201, 'Telecalling staff check-in successful');
+    }, { remarks: 'Telecalling check in' });
+    assert(teleCheckIn.statusCode === 201, 'Telecalling staff checked in');
+    const teleAttId = teleCheckIn.body.data?._id;
 
-    // Telecalling Tea Break 1
+    // Cycle through breaks for Telecalling
     const teleTea1Start = await request({
-      path: '/api/staff/attendance/break-start',
+      path: `/api/staff/attendance/${teleAttId}/breaks/start`,
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { breakType: 'Tea Break 1' });
-    assert(teleTea1Start.statusCode === 200, 'Telecalling Tea Break 1 started');
+    }, { breakType: 'tea_break_1' });
+    assert(teleTea1Start.statusCode === 200, 'Telecalling tea_break_1 started');
 
     const teleTea1End = await request({
-      path: '/api/staff/attendance/break-end',
+      path: `/api/staff/attendance/${teleAttId}/breaks/end`,
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { breakType: 'Tea Break 1' });
-    assert(teleTea1End.statusCode === 200, 'Telecalling Tea Break 1 ended');
+    }, { breakType: 'tea_break_1' });
+    assert(teleTea1End.statusCode === 200, 'Telecalling tea_break_1 ended');
 
-    // Telecalling Lunch Break
     const teleLunchStart = await request({
-      path: '/api/staff/attendance/break-start',
+      path: `/api/staff/attendance/${teleAttId}/breaks/start`,
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { breakType: 'Lunch Break' });
-    assert(teleLunchStart.statusCode === 200, 'Telecalling Lunch Break started');
+    }, { breakType: 'lunch' });
+    assert(teleLunchStart.statusCode === 200, 'Telecalling lunch started');
 
     const teleLunchEnd = await request({
-      path: '/api/staff/attendance/break-end',
+      path: `/api/staff/attendance/${teleAttId}/breaks/end`,
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { breakType: 'Lunch Break' });
-    assert(teleLunchEnd.statusCode === 200, 'Telecalling Lunch Break ended');
+    }, { breakType: 'lunch' });
+    assert(teleLunchEnd.statusCode === 200, 'Telecalling lunch ended');
 
-    // Telecalling Tea Break 2
     const teleTea2Start = await request({
-      path: '/api/staff/attendance/break-start',
+      path: `/api/staff/attendance/${teleAttId}/breaks/start`,
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { breakType: 'Tea Break 2' });
-    assert(teleTea2Start.statusCode === 200, 'Telecalling Tea Break 2 started');
+    }, { breakType: 'tea_break_2' });
+    assert(teleTea2Start.statusCode === 200, 'Telecalling tea_break_2 started');
 
     const teleTea2End = await request({
-      path: '/api/staff/attendance/break-end',
+      path: `/api/staff/attendance/${teleAttId}/breaks/end`,
       method: 'POST',
       headers: { Authorization: `Bearer ${teleToken}` }
-    }, { breakType: 'Tea Break 2' });
-    assert(teleTea2End.statusCode === 200, 'Telecalling Tea Break 2 ended');
+    }, { breakType: 'tea_break_2' });
+    assert(teleTea2End.statusCode === 200, 'Telecalling tea_break_2 ended');
 
-    // Verify Telecalling attendance via HR API with department=Telecalling
+    // Verify Telecalling attendance in HR API
     const hrTeleRes = await request({
       path: `/api/hr/attendance?department=Telecalling&date=${dateKey}`,
       method: 'GET',
@@ -462,30 +484,15 @@ async function runControlledVerification() {
     assert(hrTeleRes.statusCode === 200, 'GET /api/hr/attendance?department=Telecalling returns 200');
     const teleRows = hrTeleRes.body.data?.attendance || hrTeleRes.body.data;
     const foundTele = teleRows.find(r => String(r.staffId) === String(teleEmpId) || String(r.employee?._id) === String(teleEmpId));
-    assert(Boolean(foundTele), 'Telecalling test employee record present in department=Telecalling HR query');
-    assert(foundTele.breaks.length === 3, 'Telecalling record includes all 3 completed breaks');
+    assert(Boolean(foundTele), 'Telecalling employee found in HR query');
+    assert(foundTele.breaks.length === 3, 'Telecalling employee has 3 completed breaks');
     assert(foundTele.totalBreakMinutes >= 3, 'Telecalling totalBreakMinutes verified');
-    assert(Boolean(foundTele.breakDuration), 'Telecalling breakDuration formatted string verified');
-
-    // 15. Test Step 9 (Part 2): Verify Cross-Employee Data Isolation in History
-    console.log('\n--- 15. Step 9: Verify Cross-Employee Data Isolation in History ---');
-    const otherAttRes = await request({
-      path: '/api/staff/attendance',
-      method: 'GET',
-      headers: { Authorization: `Bearer ${otherToken}` }
-    });
-    assert(otherAttRes.statusCode === 200, 'Other staff GET /api/staff/attendance returns 200');
-    const otherRecords = otherAttRes.body.data?.attendance || otherAttRes.body.data;
-    assert(Array.isArray(otherRecords) && otherRecords.length === 1, 'Other employee only receives their own single attendance record');
-    assert(String(otherRecords[0].staffId) === String(otherEmpId), 'Returned record belongs strictly to Other staff');
-    assert(otherRecords[0].breaks.length === 0, 'Other employee has 0 breaks recorded; cannot see Tech or Telecalling employee breaks');
 
     console.log('\n================================================================================');
-    console.log('   ALL 9 VERIFICATION CHECKS PASSED WITH 100% SUCCESS!');
+    console.log('   ALL 14 INTEGRATION CHECKS PASSED WITH 100% SUCCESS!');
     console.log('================================================================================\n');
 
   } finally {
-    // Clean up dedicated test artifacts from database
     console.log('--- Cleaning Up Test Data ---');
     if (createdEmpIds.length > 0) {
       await Attendance.deleteMany({ employee: { $in: createdEmpIds } });

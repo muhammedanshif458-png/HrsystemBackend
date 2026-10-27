@@ -273,7 +273,7 @@ class StaffService {
   }
 
   /**
-   * Start a staff break (Tea Break 1, Lunch Break, Tea Break 2)
+   * Start a staff break (tea_break_1, lunch, tea_break_2 / Tea Break 1, Lunch Break, Tea Break 2)
    */
   async startBreak(user, body = {}) {
     const employee = await this.getEmployeeOrThrow(user);
@@ -282,23 +282,37 @@ class StaffService {
       throw new AppError(`Cannot start break. Employee status is currently: ${employee.status}`, 400);
     }
 
-    const schedule = await getScheduleForDepartment(employee.department);
-    const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : 'Asia/Kolkata';
-    const now = new Date();
-    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
-    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
+    let attendance;
+    if (body.attendanceId) {
+      if (!mongoose.Types.ObjectId.isValid(body.attendanceId)) {
+        throw new AppError('Invalid attendance ID format', 400);
+      }
+      attendance = await Attendance.findById(body.attendanceId);
+      if (!attendance) {
+        throw new AppError('Attendance record not found', 404);
+      }
+      if (attendance.employee.toString() !== employee._id.toString()) {
+        throw new AppError('Unauthorized: attendance record belongs to another employee', 403);
+      }
+    } else {
+      const schedule = await getScheduleForDepartment(employee.department);
+      const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : 'Asia/Kolkata';
+      const now = new Date();
+      const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
+      const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-    let attendance = await Attendance.findOne({
-      employee: employee._id,
-      date: { $gte: todayMidnight, $lte: todayEnd }
-    });
-
-    if (!attendance) {
       attendance = await Attendance.findOne({
         employee: employee._id,
-        checkIn: { $ne: null },
-        checkOut: null
-      }).sort({ checkIn: -1 });
+        date: { $gte: todayMidnight, $lte: todayEnd }
+      });
+
+      if (!attendance) {
+        attendance = await Attendance.findOne({
+          employee: employee._id,
+          checkIn: { $ne: null },
+          checkOut: null
+        }).sort({ checkIn: -1 });
+      }
     }
 
     if (!attendance || !attendance.checkIn) {
@@ -319,7 +333,7 @@ class StaffService {
     const breakType = normalizeBreakType(rawType);
 
     if (!breakType) {
-      throw new AppError('Invalid break type. Allowed break types: Tea Break 1, Lunch Break, Tea Break 2.', 400);
+      throw new AppError('Invalid break type. Supported types: tea_break_1, lunch, tea_break_2.', 400);
     }
 
     // Prevent duplicate starts for the same break type today
@@ -328,6 +342,7 @@ class StaffService {
       throw new AppError(`${breakType} has already been taken today`, 400);
     }
 
+    const now = new Date();
     const breakItem = {
       breakType,
       startTime: now,
@@ -347,7 +362,21 @@ class StaffService {
     attendance.breakStartedAt = now;
 
     await attendance.save();
-    return attendance;
+
+    const attendanceJson = attendance.toJSON ? attendance.toJSON() : attendance.toObject();
+    return {
+      ...attendanceJson,
+      breakId: addedBreak._id.toString(),
+      id: addedBreak._id.toString(),
+      attendanceId: attendance._id.toString(),
+      breakType: addedBreak.breakType,
+      type: addedBreak.breakType,
+      startTime: addedBreak.startTime.toISOString(),
+      endTime: null,
+      durationMinutes: 0,
+      durationSeconds: 0,
+      attendance: attendanceJson
+    };
   }
 
   /**
@@ -356,23 +385,37 @@ class StaffService {
   async endBreak(user, body = {}) {
     const employee = await this.getEmployeeOrThrow(user);
 
-    const schedule = await getScheduleForDepartment(employee.department);
-    const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : 'Asia/Kolkata';
-    const now = new Date();
-    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
-    const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
+    let attendance;
+    if (body.attendanceId) {
+      if (!mongoose.Types.ObjectId.isValid(body.attendanceId)) {
+        throw new AppError('Invalid attendance ID format', 400);
+      }
+      attendance = await Attendance.findById(body.attendanceId);
+      if (!attendance) {
+        throw new AppError('Attendance record not found', 404);
+      }
+      if (attendance.employee.toString() !== employee._id.toString()) {
+        throw new AppError('Unauthorized: attendance record belongs to another employee', 403);
+      }
+    } else {
+      const schedule = await getScheduleForDepartment(employee.department);
+      const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : 'Asia/Kolkata';
+      const now = new Date();
+      const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
+      const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-    let attendance = await Attendance.findOne({
-      employee: employee._id,
-      date: { $gte: todayMidnight, $lte: todayEnd }
-    });
-
-    if (!attendance) {
       attendance = await Attendance.findOne({
         employee: employee._id,
-        checkIn: { $ne: null },
-        checkOut: null
-      }).sort({ checkIn: -1 });
+        date: { $gte: todayMidnight, $lte: todayEnd }
+      });
+
+      if (!attendance) {
+        attendance = await Attendance.findOne({
+          employee: employee._id,
+          checkIn: { $ne: null },
+          checkOut: null
+        }).sort({ checkIn: -1 });
+      }
     }
 
     if (!attendance || !attendance.checkIn) {
@@ -406,9 +449,11 @@ class StaffService {
       throw new AppError('Could not find active break record to end', 400);
     }
 
+    const now = new Date();
     targetBreak.endTime = now;
     const diffMs = Math.max(0, now.getTime() - new Date(targetBreak.startTime).getTime());
     targetBreak.durationMinutes = Math.max(1, Math.round(diffMs / 60000));
+    const durationSeconds = Math.max(0, Math.round(diffMs / 1000));
 
     if (body.remarks && body.remarks.trim()) {
       targetBreak.remarks = targetBreak.remarks
@@ -421,7 +466,22 @@ class StaffService {
     attendance.breakStartedAt = null;
 
     await attendance.save();
-    return attendance;
+
+    const attendanceJson = attendance.toJSON ? attendance.toJSON() : attendance.toObject();
+    return {
+      ...attendanceJson,
+      breakId: targetBreak._id.toString(),
+      id: targetBreak._id.toString(),
+      attendanceId: attendance._id.toString(),
+      breakType: targetBreak.breakType,
+      type: targetBreak.breakType,
+      startTime: targetBreak.startTime ? new Date(targetBreak.startTime).toISOString() : null,
+      endTime: targetBreak.endTime ? new Date(targetBreak.endTime).toISOString() : null,
+      durationMinutes: targetBreak.durationMinutes,
+      durationSeconds,
+      totalBreakMinutes: attendance.totalBreakMinutes,
+      attendance: attendanceJson
+    };
   }
 
   /**
@@ -477,6 +537,31 @@ class StaffService {
 
       const totalBreakMins = Number(rec.totalBreakMinutes) || (Array.isArray(rec.breaks) ? rec.breaks.reduce((s, b) => s + (b.durationMinutes || 0), 0) : 0);
 
+      const enrichedBreaks = (rec.breaks || []).map(b => {
+        const bObj = typeof b.toObject === 'function' ? b.toObject() : { ...b };
+        const startMs = b.startTime ? new Date(b.startTime).getTime() : 0;
+        const endMs = b.endTime ? new Date(b.endTime).getTime() : 0;
+        const durationSeconds = endMs && startMs ? Math.max(0, Math.round((endMs - startMs) / 1000)) : 0;
+        const durationMins = typeof b.durationMinutes === 'number'
+          ? b.durationMinutes
+          : (durationSeconds ? Math.max(1, Math.round(durationSeconds / 60)) : 0);
+        return {
+          ...bObj,
+          id: b._id ? b._id.toString() : (b.id ? b.id.toString() : ''),
+          breakId: b._id ? b._id.toString() : (b.id ? b.id.toString() : ''),
+          attendanceId: rec._id ? rec._id.toString() : '',
+          breakType: b.breakType,
+          type: b.breakType,
+          startTime: b.startTime ? new Date(b.startTime).toISOString() : null,
+          endTime: b.endTime ? new Date(b.endTime).toISOString() : null,
+          durationMinutes: durationMins,
+          durationSeconds,
+          isActive: !b.endTime,
+          isCompleted: Boolean(b.endTime),
+          remarks: b.remarks || ''
+        };
+      });
+
       return {
         ...rec,
         id: rec._id ? rec._id.toString() : '',
@@ -488,7 +573,8 @@ class StaffService {
         workedDuration,
         breakDuration: formatBreakDurationStr(totalBreakMins),
         totalBreakMinutes: totalBreakMins,
-        breaks: rec.breaks || [],
+        totalBreakSeconds: totalBreakMins * 60,
+        breaks: enrichedBreaks,
         activeBreak: rec.activeBreak || null,
         breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (rec.activeBreak?.startTime ? new Date(rec.activeBreak.startTime).toISOString() : null),
         department: employee.department || snapshot?.department || null,

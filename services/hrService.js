@@ -688,6 +688,31 @@ return {
           return `${rem}m`;
         };
 
+        const enrichedBreaks = (rec.breaks || []).map(b => {
+          const bObj = typeof b.toObject === 'function' ? b.toObject() : { ...b };
+          const startMs = b.startTime ? new Date(b.startTime).getTime() : 0;
+          const endMs = b.endTime ? new Date(b.endTime).getTime() : 0;
+          const durationSeconds = endMs && startMs ? Math.max(0, Math.round((endMs - startMs) / 1000)) : 0;
+          const durationMins = typeof b.durationMinutes === 'number'
+            ? b.durationMinutes
+            : (durationSeconds ? Math.max(1, Math.round(durationSeconds / 60)) : 0);
+          return {
+            ...bObj,
+            id: b._id ? b._id.toString() : (b.id ? b.id.toString() : ''),
+            breakId: b._id ? b._id.toString() : (b.id ? b.id.toString() : ''),
+            attendanceId: rec._id ? rec._id.toString() : '',
+            breakType: b.breakType,
+            type: b.breakType,
+            startTime: b.startTime ? new Date(b.startTime).toISOString() : null,
+            endTime: b.endTime ? new Date(b.endTime).toISOString() : null,
+            durationMinutes: durationMins,
+            durationSeconds,
+            isActive: !b.endTime,
+            isCompleted: Boolean(b.endTime),
+            remarks: b.remarks || ''
+          };
+        });
+
         return {
           ...rec,
           id: rec._id ? rec._id.toString() : '',
@@ -699,7 +724,8 @@ return {
           workedDuration,
           breakDuration: formatBreakDurationStr(totalBreakMins),
           totalBreakMinutes: totalBreakMins,
-          breaks: rec.breaks || [],
+          totalBreakSeconds: totalBreakMins * 60,
+          breaks: enrichedBreaks,
           activeBreak: rec.activeBreak || null,
           breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (rec.activeBreak?.startTime ? new Date(rec.activeBreak.startTime).toISOString() : null),
           isLate: isLateRec,

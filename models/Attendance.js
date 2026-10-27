@@ -6,6 +6,9 @@ const breakItemSchema = new mongoose.Schema(
       type: String,
       enum: {
         values: [
+          'tea_break_1',
+          'lunch',
+          'tea_break_2',
           'Tea Break 1',
           'Lunch Break',
           'Tea Break 2',
@@ -98,6 +101,9 @@ const attendanceSchema = new mongoose.Schema(
         breakType: {
           type: String,
           enum: [
+            'tea_break_1',
+            'lunch',
+            'tea_break_2',
             'Tea Break 1',
             'Lunch Break',
             'Tea Break 2',

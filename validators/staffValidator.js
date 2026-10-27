@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { body, param } = require('express-validator');
 const { validate } = require('./authValidator');
 
@@ -109,27 +110,32 @@ const areBreaksEquivalent = (typeA, typeB) => {
 
 const normalizeBreakType = (type) => {
   if (!type || typeof type !== 'string') return null;
-  const t = type.trim().toLowerCase().replace(/[\-_]/g, ' ');
+  const raw = type.trim();
+  const lower = raw.toLowerCase();
+
+  if (lower === 'tea_break_1') return 'tea_break_1';
+  if (lower === 'tea_break_2') return 'tea_break_2';
+  if (lower === 'lunch') return 'lunch';
+
+  const t = lower.replace(/[\-_]/g, ' ');
   if (
     t === 'tea break 1' ||
     t === 'tea 1' ||
     t === 'teabreak1' ||
-    t === 'teabreak 1' ||
     t === 'tea break one'
   ) {
-    return 'Tea Break 1';
+    return raw === 'tea_break_1' ? 'tea_break_1' : 'Tea Break 1';
   }
-  if (t === 'lunch' || t === 'lunch break' || t === 'lunchbreak') {
+  if (t === 'lunch break' || t === 'lunchbreak') {
     return 'Lunch Break';
   }
   if (
     t === 'tea break 2' ||
     t === 'tea 2' ||
     t === 'teabreak2' ||
-    t === 'teabreak 2' ||
     t === 'tea break two'
   ) {
-    return 'Tea Break 2';
+    return raw === 'tea_break_2' ? 'tea_break_2' : 'Tea Break 2';
   }
   if (t === 'morning' || t === 'morning break' || t === 'morningbreak') {
     return 'Morning Break';
@@ -150,18 +156,25 @@ const breakStartValidator = [
     .trim()
     .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
   (req, res, next) => {
+    if (req.params.attendanceId && !mongoose.Types.ObjectId.isValid(req.params.attendanceId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid attendance ID format'
+      });
+    }
+
     const rawType = req.body.breakType || req.body.type || req.body.breakName || req.body.name;
     if (!rawType || !String(rawType).trim()) {
       return res.status(400).json({
         success: false,
-        message: 'breakType is required. Allowed types: Tea Break 1, Lunch Break, Tea Break 2.'
+        message: 'breakType is required. Supported types: tea_break_1, lunch, tea_break_2.'
       });
     }
     const normalized = normalizeBreakType(rawType);
     if (!normalized) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid break type. Allowed types: Tea Break 1, Lunch Break, Tea Break 2 (or Morning Break, Afternoon Break).'
+        message: 'Invalid break type. Supported types: tea_break_1, lunch, tea_break_2 (or Tea Break 1, Lunch Break, Tea Break 2).'
       });
     }
     req.body.canonicalBreakType = normalized;
@@ -181,13 +194,20 @@ const breakEndValidator = [
     .trim()
     .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
   (req, res, next) => {
+    if (req.params.attendanceId && !mongoose.Types.ObjectId.isValid(req.params.attendanceId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid attendance ID format'
+      });
+    }
+
     const rawType = req.body.breakType || req.body.type || req.body.breakName || req.body.name;
     if (rawType && String(rawType).trim()) {
       const normalized = normalizeBreakType(rawType);
       if (!normalized) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid break type. Allowed types: Tea Break 1, Lunch Break, Tea Break 2 (or Morning Break, Afternoon Break).'
+          message: 'Invalid break type. Supported types: tea_break_1, lunch, tea_break_2 (or Tea Break 1, Lunch Break, Tea Break 2).'
         });
       }
       req.body.canonicalBreakType = normalized;
