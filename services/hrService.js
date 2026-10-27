@@ -5,6 +5,7 @@ const Attendance = require('../models/Attendance');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
 const { isAttendanceForCurrentWorkday, getDateKey, getDayBoundsForKey } = require('../utils/attendanceSchedule');
 const Leave = require('../models/Leave');
+const Task = require('../models/Task');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { summarizeAttendanceDay } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
@@ -18,7 +19,19 @@ class HRService {
    */
   async getDashboardStats(dateKey = null) {
     const { startOfDay, endOfDay } = getDayBounds(dateKey);
-    const [totalEmployees, activeEmployees, inactiveEmployees, active, todayRows, approvedTodayLeaves, pendingLeaves, approvedLeaves] = await Promise.all([
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [
+      totalEmployees,
+      activeEmployees,
+      inactiveEmployees,
+      active,
+      todayRows,
+      approvedTodayLeaves,
+      pendingLeaves,
+      approvedLeaves,
+      openTasks,
+      resignedLast30Days
+    ] = await Promise.all([
       Employee.countDocuments(),
       Employee.countDocuments({ status: 'ACTIVE' }),
       Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
@@ -30,7 +43,9 @@ class HRService {
         .lean(),
       Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
       Leave.countDocuments({ status: 'PENDING' }),
-      Leave.countDocuments({ status: 'APPROVED' })
+      Leave.countDocuments({ status: 'APPROVED' }),
+      Task.countDocuments({ status: { $in: ['pending', 'in-progress'] }, isDeleted: { $ne: true } }),
+      Employee.countDocuments({ status: { $in: ['TERMINATED', 'RESIGNED'] }, updatedAt: { $gte: thirtyDaysAgo } })
     ]);
     const metrics = summarizeAttendanceDay({
       activeEmployeeIds: active.map(employee => employee._id),
@@ -38,10 +53,20 @@ class HRService {
       approvedLeaveRows: approvedTodayLeaves,
       dateKey: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
     });
+    const eligibleEmployees = Math.max(0, activeEmployees - (metrics.onLeaveToday || 0));
+    const notCheckedIn = Math.max(0, eligibleEmployees - (metrics.todayPresent || 0));
     return {
-      totalEmployees, activeEmployees, inactiveEmployees, ...metrics,
+      totalEmployees,
+      activeEmployees,
+      inactiveEmployees,
+      eligibleEmployees,
+      notCheckedIn,
+      openTasks,
+      resignedLast30Days,
+      ...metrics,
       todayLate: metrics.lateArrivals,
-      pendingLeaves, approvedLeaves
+      pendingLeaves,
+      approvedLeaves
     };
   }
 
