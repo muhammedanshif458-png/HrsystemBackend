@@ -49,10 +49,18 @@ class AuthService {
       userObj.employee = employeeData;
     }
 
+    if (!userObj.id && userObj._id) {
+      userObj.id = userObj._id.toString();
+    }
+    if (!userObj.name) {
+      userObj.name = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+    }
+
     return {
-      user: userObj,
+      token: accessToken,
       accessToken,
-      refreshToken
+      refreshToken,
+      user: userObj
     };
   }
 
@@ -83,6 +91,7 @@ class AuthService {
     await user.save();
 
     return {
+      token: newAccessToken,
       accessToken: newAccessToken,
       refreshToken: newRefreshToken
     };

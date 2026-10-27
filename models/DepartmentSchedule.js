@@ -64,8 +64,17 @@ const departmentScheduleSchema = new mongoose.Schema(
 
 // Synchronize timezone and timeZone fields on save
 departmentScheduleSchema.pre('save', function(next) {
-  if (this.timeZone && !this.timezone) this.timezone = this.timeZone;
-  if (this.timezone && !this.timeZone) this.timeZone = this.timezone;
+  if (this.isModified('timezone') && !this.isModified('timeZone')) {
+    this.timeZone = this.timezone;
+  } else if (this.isModified('timeZone') && !this.isModified('timezone')) {
+    this.timezone = this.timeZone;
+  } else {
+    if (this.timezone && (!this.timeZone || this.timeZone === 'Asia/Kolkata')) {
+      this.timeZone = this.timezone;
+    } else if (this.timeZone && (!this.timezone || this.timezone === 'Asia/Kolkata')) {
+      this.timezone = this.timeZone;
+    }
+  }
   if (!this.departmentDisplay) this.departmentDisplay = this.department;
   next();
 });
@@ -99,7 +108,8 @@ departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmen
 
   const deptQuery = [
     { department: new RegExp(`^${canonicalDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-    { department: new RegExp(`^${rawDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+    { department: new RegExp(`^${rawDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+    { departmentDisplay: new RegExp(`^${rawDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
   ];
 
   return this.findOne({

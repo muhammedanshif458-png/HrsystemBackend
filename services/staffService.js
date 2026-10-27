@@ -164,11 +164,11 @@ class StaffService {
       throw new AppError(`Cannot check in. Employee status is currently: ${employee.status}`, 400);
     }
 
-    const schedule = await getScheduleForDepartment(employee.department);
+    const schedule = await getScheduleForDepartment(employee.department, checkIn);
     if (!(checkIn instanceof Date) || Number.isNaN(checkIn.getTime())) {
       throw new AppError('Invalid check-in timestamp', 400);
     }
-    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : null;
     // Without a configured schedule, retain the legacy UTC workday and do not infer lateness.
     const date = schedule ? getUtcDateForKey(getDateKey(checkIn, tz)) : getMidnightToday(checkIn);
     const dayEnd = new Date(date.getTime() + 24 * 60 * 60 * 1000 - 1);
@@ -184,28 +184,10 @@ class StaffService {
     }
 
     const classification = classifyCheckIn(checkIn, schedule);
-    const isLate = Boolean(classification.late);
-    let minutesLate = 0;
-    let scheduleStatus = classification.scheduleConfigured ? 'CONFIGURED' : 'UNCONFIGURED';
-    let scheduleSnapshot = null;
-
-    if (schedule && classification.scheduleConfigured) {
-      const [hour, minute] = schedule.checkInTime.split(':').map(Number);
-      const { getLocalParts } = require('../utils/attendanceSchedule');
-      const local = getLocalParts(checkIn, tz);
-      const actualMinutes = Number(local.hour) * 60 + Number(local.minute);
-      const scheduledMinutes = hour * 60 + minute;
-      if (isLate) {
-        minutesLate = Math.max(0, actualMinutes - scheduledMinutes);
-      }
-      scheduleSnapshot = {
-        department: schedule.department,
-        scheduledCheckIn: schedule.checkInTime,
-        scheduledCheckOut: schedule.checkOutTime || '18:00',
-        gracePeriodMinutes: schedule.gracePeriodMinutes || 0,
-        timezone: tz
-      };
-    }
+    const isLate = Boolean(classification.isLate ?? classification.late);
+    const minutesLate = Number(classification.minutesLate) || 0;
+    const scheduleStatus = classification.scheduleConfigured ? 'CONFIGURED' : 'UNCONFIGURED';
+    const scheduleSnapshot = classification.scheduleSnapshot || null;
 
     const attendance = new Attendance({
       employee: employee._id,
@@ -214,6 +196,7 @@ class StaffService {
       workMode: employee.workMode || null,
       status: 'PRESENT',
       ...classification,
+      late: isLate,
       isLate,
       minutesLate,
       scheduleStatus,
@@ -230,9 +213,10 @@ class StaffService {
    */
   async checkOut(user, remarks = '') {
     const employee = await this.getEmployeeOrThrow(user);
-    const schedule = await getScheduleForDepartment(employee.department);
     const today = new Date();
-    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(today, schedule.timeZone)) : getMidnightToday(today);
+    const schedule = await getScheduleForDepartment(employee.department, today);
+    const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : null;
+    const todayMidnight = schedule ? getUtcDateForKey(getDateKey(today, tz)) : getMidnightToday(today);
     const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const attendance = await Attendance.findOne({
