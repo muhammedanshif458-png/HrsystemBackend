@@ -476,8 +476,9 @@ async function runControlledVerification() {
     });
     assert(otherAttRes.statusCode === 200, 'Other staff GET /api/staff/attendance returns 200');
     const otherRecords = otherAttRes.body.data?.attendance || otherAttRes.body.data;
-    // Other staff never checked in today, so should have 0 records
-    assert(Array.isArray(otherRecords) && otherRecords.length === 0, 'Other employee cannot see Tech or Telecalling employee records');
+    assert(Array.isArray(otherRecords) && otherRecords.length === 1, 'Other employee only receives their own single attendance record');
+    assert(String(otherRecords[0].staffId) === String(otherEmpId), 'Returned record belongs strictly to Other staff');
+    assert(otherRecords[0].breaks.length === 0, 'Other employee has 0 breaks recorded; cannot see Tech or Telecalling employee breaks');
 
     console.log('\n================================================================================');
     console.log('   ALL 9 VERIFICATION CHECKS PASSED WITH 100% SUCCESS!');
