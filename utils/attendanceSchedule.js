@@ -19,8 +19,14 @@ const getDateKey = (date, timeZone) => {
 const getUtcDateForKey = (key) => new Date(`${key}T00:00:00.000Z`);
 
 const getDayBoundsForKey = (key) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) throw new Error('Invalid attendance date; expected YYYY-MM-DD');
-  const startOfDay = getUtcDateForKey(key);
+  let strKey = '';
+  if (key instanceof Date) {
+    strKey = key.toISOString().slice(0, 10);
+  } else if (typeof key === 'string') {
+    strKey = key.trim().slice(0, 10);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(strKey)) throw new Error('Invalid attendance date; expected YYYY-MM-DD');
+  const startOfDay = getUtcDateForKey(strKey);
   const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
   return { startOfDay, endOfDay };
 };

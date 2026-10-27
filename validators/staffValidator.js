@@ -66,14 +66,77 @@ const checkOutValidator = [
 ];
 
 /**
- * Normalizes frontend break types ('Morning Break', 'Lunch Break', 'Afternoon Break', 'morning_break', etc.)
+ * Normalizes frontend break types ('Tea Break 1', 'Lunch Break', 'Tea Break 2', 'Morning Break', 'Afternoon Break', etc.)
  */
+const getBreakCategory = (type) => {
+  if (!type || typeof type !== 'string') return null;
+  const t = type.trim().toLowerCase().replace(/[\-_]/g, ' ');
+  if (
+    t === 'tea break 1' ||
+    t === 'tea 1' ||
+    t === 'teabreak1' ||
+    t === 'teabreak 1' ||
+    t === 'tea break one' ||
+    t === 'morning' ||
+    t === 'morning break' ||
+    t === 'morningbreak'
+  ) {
+    return 'TEA_BREAK_1';
+  }
+  if (t === 'lunch' || t === 'lunch break' || t === 'lunchbreak') {
+    return 'LUNCH_BREAK';
+  }
+  if (
+    t === 'tea break 2' ||
+    t === 'tea 2' ||
+    t === 'teabreak2' ||
+    t === 'teabreak 2' ||
+    t === 'tea break two' ||
+    t === 'afternoon' ||
+    t === 'afternoon break' ||
+    t === 'afternoonbreak'
+  ) {
+    return 'TEA_BREAK_2';
+  }
+  return null;
+};
+
+const areBreaksEquivalent = (typeA, typeB) => {
+  const catA = getBreakCategory(typeA);
+  const catB = getBreakCategory(typeB);
+  return Boolean(catA && catB && catA === catB);
+};
+
 const normalizeBreakType = (type) => {
   if (!type || typeof type !== 'string') return null;
   const t = type.trim().toLowerCase().replace(/[\-_]/g, ' ');
-  if (t === 'morning' || t === 'morning break') return 'Morning Break';
-  if (t === 'lunch' || t === 'lunch break') return 'Lunch Break';
-  if (t === 'afternoon' || t === 'afternoon break') return 'Afternoon Break';
+  if (
+    t === 'tea break 1' ||
+    t === 'tea 1' ||
+    t === 'teabreak1' ||
+    t === 'teabreak 1' ||
+    t === 'tea break one'
+  ) {
+    return 'Tea Break 1';
+  }
+  if (t === 'lunch' || t === 'lunch break' || t === 'lunchbreak') {
+    return 'Lunch Break';
+  }
+  if (
+    t === 'tea break 2' ||
+    t === 'tea 2' ||
+    t === 'teabreak2' ||
+    t === 'teabreak 2' ||
+    t === 'tea break two'
+  ) {
+    return 'Tea Break 2';
+  }
+  if (t === 'morning' || t === 'morning break' || t === 'morningbreak') {
+    return 'Morning Break';
+  }
+  if (t === 'afternoon' || t === 'afternoon break' || t === 'afternoonbreak') {
+    return 'Afternoon Break';
+  }
   return null;
 };
 
@@ -91,14 +154,14 @@ const breakStartValidator = [
     if (!rawType || !String(rawType).trim()) {
       return res.status(400).json({
         success: false,
-        message: 'breakType is required. Allowed types: Morning Break, Lunch Break, Afternoon Break.'
+        message: 'breakType is required. Allowed types: Tea Break 1, Lunch Break, Tea Break 2.'
       });
     }
     const normalized = normalizeBreakType(rawType);
     if (!normalized) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid break type. Allowed types: Morning Break, Lunch Break, Afternoon Break.'
+        message: 'Invalid break type. Allowed types: Tea Break 1, Lunch Break, Tea Break 2 (or Morning Break, Afternoon Break).'
       });
     }
     req.body.canonicalBreakType = normalized;
@@ -124,7 +187,7 @@ const breakEndValidator = [
       if (!normalized) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid break type. Allowed types: Morning Break, Lunch Break, Afternoon Break.'
+          message: 'Invalid break type. Allowed types: Tea Break 1, Lunch Break, Tea Break 2 (or Morning Break, Afternoon Break).'
         });
       }
       req.body.canonicalBreakType = normalized;
@@ -296,6 +359,8 @@ const dailyUpdateIdParamValidator = [
 
 module.exports = {
   normalizeBreakType,
+  getBreakCategory,
+  areBreaksEquivalent,
   breakStartValidator,
   breakEndValidator,
   normalizeLeaveType,

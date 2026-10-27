@@ -273,7 +273,7 @@ class StaffService {
   }
 
   /**
-   * Start a staff break (Morning Break, Lunch Break, Afternoon Break)
+   * Start a staff break (Tea Break 1, Lunch Break, Tea Break 2)
    */
   async startBreak(user, body = {}) {
     const employee = await this.getEmployeeOrThrow(user);
@@ -283,15 +283,23 @@ class StaffService {
     }
 
     const schedule = await getScheduleForDepartment(employee.department);
-    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : 'Asia/Kolkata';
     const now = new Date();
     const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
     const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-    const attendance = await Attendance.findOne({
+    let attendance = await Attendance.findOne({
       employee: employee._id,
       date: { $gte: todayMidnight, $lte: todayEnd }
     });
+
+    if (!attendance) {
+      attendance = await Attendance.findOne({
+        employee: employee._id,
+        checkIn: { $ne: null },
+        checkOut: null
+      }).sort({ checkIn: -1 });
+    }
 
     if (!attendance || !attendance.checkIn) {
       throw new AppError('Cannot start break before checking in for today', 400);
@@ -307,15 +315,15 @@ class StaffService {
     }
 
     const rawType = body.canonicalBreakType || body.breakType || body.type || body.breakName || body.name;
-    const { normalizeBreakType } = require('../validators/staffValidator');
+    const { normalizeBreakType, areBreaksEquivalent } = require('../validators/staffValidator');
     const breakType = normalizeBreakType(rawType);
 
     if (!breakType) {
-      throw new AppError('Invalid break type. Allowed break types: Morning Break, Lunch Break, Afternoon Break.', 400);
+      throw new AppError('Invalid break type. Allowed break types: Tea Break 1, Lunch Break, Tea Break 2.', 400);
     }
 
     // Prevent duplicate starts for the same break type today
-    const alreadyTaken = attendance.breaks.some(b => b.breakType === breakType);
+    const alreadyTaken = attendance.breaks.some(b => areBreaksEquivalent(b.breakType, breakType));
     if (alreadyTaken) {
       throw new AppError(`${breakType} has already been taken today`, 400);
     }
@@ -349,15 +357,23 @@ class StaffService {
     const employee = await this.getEmployeeOrThrow(user);
 
     const schedule = await getScheduleForDepartment(employee.department);
-    const tz = schedule ? (schedule.timeZone || schedule.timezone) : null;
+    const tz = schedule ? (schedule.timeZone || schedule.timezone || 'Asia/Kolkata') : 'Asia/Kolkata';
     const now = new Date();
     const todayMidnight = schedule ? getUtcDateForKey(getDateKey(now, tz)) : getMidnightToday(now);
     const todayEnd = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-    const attendance = await Attendance.findOne({
+    let attendance = await Attendance.findOne({
       employee: employee._id,
       date: { $gte: todayMidnight, $lte: todayEnd }
     });
+
+    if (!attendance) {
+      attendance = await Attendance.findOne({
+        employee: employee._id,
+        checkIn: { $ne: null },
+        checkOut: null
+      }).sort({ checkIn: -1 });
+    }
 
     if (!attendance || !attendance.checkIn) {
       throw new AppError('Cannot end break before checking in for today', 400);
@@ -372,10 +388,10 @@ class StaffService {
     }
 
     const rawType = body.canonicalBreakType || body.breakType || body.type || body.breakName || body.name;
+    const { normalizeBreakType, areBreaksEquivalent } = require('../validators/staffValidator');
     if (rawType) {
-      const { normalizeBreakType } = require('../validators/staffValidator');
       const requestedBreakType = normalizeBreakType(rawType);
-      if (requestedBreakType && requestedBreakType !== attendance.activeBreak.breakType) {
+      if (requestedBreakType && !areBreaksEquivalent(requestedBreakType, attendance.activeBreak.breakType)) {
         throw new AppError(`Active break is ${attendance.activeBreak.breakType}, but requested to end ${requestedBreakType}`, 400);
       }
     }
@@ -383,7 +399,7 @@ class StaffService {
     const activeBreakId = attendance.activeBreak.breakId;
     let targetBreak = activeBreakId ? attendance.breaks.id(activeBreakId) : null;
     if (!targetBreak) {
-      targetBreak = attendance.breaks.find(b => b.breakType === attendance.activeBreak.breakType && !b.endTime);
+      targetBreak = attendance.breaks.find(b => areBreaksEquivalent(b.breakType, attendance.activeBreak.breakType) && !b.endTime);
     }
 
     if (!targetBreak) {

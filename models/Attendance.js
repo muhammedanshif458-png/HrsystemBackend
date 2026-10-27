@@ -5,7 +5,13 @@ const breakItemSchema = new mongoose.Schema(
     breakType: {
       type: String,
       enum: {
-        values: ['Morning Break', 'Lunch Break', 'Afternoon Break'],
+        values: [
+          'Tea Break 1',
+          'Lunch Break',
+          'Tea Break 2',
+          'Morning Break',
+          'Afternoon Break'
+        ],
         message: '{VALUE} is not a valid break type'
       },
       required: [true, 'Break type is required']
@@ -29,8 +35,17 @@ const breakItemSchema = new mongoose.Schema(
       default: ''
     }
   },
-  { _id: true, timestamps: true }
+  {
+    _id: true,
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
+
+breakItemSchema.virtual('duration').get(function() {
+  return typeof this.durationMinutes === 'number' ? this.durationMinutes : 0;
+});
 
 const attendanceSchema = new mongoose.Schema(
   {
@@ -82,7 +97,13 @@ const attendanceSchema = new mongoose.Schema(
       type: {
         breakType: {
           type: String,
-          enum: ['Morning Break', 'Lunch Break', 'Afternoon Break']
+          enum: [
+            'Tea Break 1',
+            'Lunch Break',
+            'Tea Break 2',
+            'Morning Break',
+            'Afternoon Break'
+          ]
         },
         startTime: Date,
         breakId: mongoose.Schema.Types.ObjectId
