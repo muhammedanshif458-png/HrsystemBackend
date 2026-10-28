@@ -104,7 +104,7 @@ async function runControlledVerification() {
       headers: { Authorization: `Bearer ${adminToken}` }
     }, {
       department: 'Tech',
-      checkInTime: '09:00',
+      checkInTime: '10:00',
       checkOutTime: '18:00',
       gracePeriodMinutes: 15,
       timezone: 'Asia/Kolkata',
@@ -117,8 +117,8 @@ async function runControlledVerification() {
       headers: { Authorization: `Bearer ${adminToken}` }
     }, {
       department: 'Telecalling',
-      checkInTime: '09:30',
-      checkOutTime: '18:30',
+      checkInTime: '09:00',
+      checkOutTime: '18:00',
       gracePeriodMinutes: 15,
       timezone: 'Asia/Kolkata',
       effectiveDate: '2026-10-20'

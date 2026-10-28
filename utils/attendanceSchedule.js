@@ -33,8 +33,9 @@ const getDayBoundsForKey = (key) => {
 
 const isAttendanceForCurrentWorkday = (attendance, now = new Date()) => {
   if (!attendance?.date) return false;
-  const timeZone = attendance.scheduleTimeZone || 'UTC';
-  return attendance.date.toISOString().slice(0, 10) === getDateKey(now, timeZone);
+  const timeZone = attendance.scheduleTimeZone || attendance.scheduleSnapshot?.timezone || 'UTC';
+  const attDateStr = (attendance.date instanceof Date ? attendance.date.toISOString() : String(attendance.date)).slice(0, 10);
+  return attDateStr === getDateKey(now, timeZone);
 };
 
 const classifyCheckIn = (checkIn, schedule) => {
@@ -44,7 +45,10 @@ const classifyCheckIn = (checkIn, schedule) => {
       isLate: false,
       minutesLate: 0,
       scheduledCheckIn: null,
+      scheduledCheckOut: null,
       scheduleTimeZone: null,
+      timezone: null,
+      gracePeriodMinutes: 0,
       scheduleConfigured: false,
       scheduleStatus: 'UNCONFIGURED',
       scheduleSnapshot: null
@@ -52,31 +56,32 @@ const classifyCheckIn = (checkIn, schedule) => {
   }
 
   const tz = schedule.timeZone || schedule.timezone || 'Asia/Kolkata';
-  const local = getLocalParts(checkIn, tz);
-  const actualMinutes = Number(local.hour) * 60 + Number(local.minute);
-  const [hour, minute] = schedule.checkInTime.split(':').map(Number);
-  const cutoffMinutes = hour * 60 + minute + (Number(schedule.gracePeriodMinutes) || 0);
-
   const { calculateLateness } = require('./scheduleHelper');
   const lateness = calculateLateness(checkIn, schedule);
 
-  const isLate = Boolean(lateness.isLate || actualMinutes > cutoffMinutes);
-  const minutesLate = isLate ? Math.max(1, lateness.minutesLate || (actualMinutes - (hour * 60 + minute))) : 0;
+  const isLate = Boolean(lateness.isLate);
+  const minutesLate = lateness.minutesLate || 0;
+  const scheduledCheckIn = schedule.checkInTime || schedule.scheduledCheckIn;
+  const scheduledCheckOut = schedule.checkOutTime || schedule.scheduledCheckOut || '18:00';
+  const gracePeriodMinutes = Number(schedule.gracePeriodMinutes) || 0;
 
   return {
     late: isLate,
     isLate,
     minutesLate,
-    scheduledCheckIn: schedule.checkInTime || schedule.scheduledCheckIn,
+    scheduledCheckIn,
+    scheduledCheckOut,
     scheduleTimeZone: tz,
+    timezone: tz,
+    gracePeriodMinutes,
     scheduleConfigured: true,
     scheduleStatus: 'CONFIGURED',
     scheduleSnapshot: lateness.scheduleSnapshot || {
       scheduleId: schedule._id || schedule.scheduleId || null,
       department: schedule.department || null,
-      scheduledCheckIn: schedule.checkInTime,
-      scheduledCheckOut: schedule.checkOutTime || schedule.scheduledCheckOut || '18:00',
-      gracePeriodMinutes: Number(schedule.gracePeriodMinutes) || 0,
+      scheduledCheckIn,
+      scheduledCheckOut,
+      gracePeriodMinutes,
       timezone: tz
     }
   };
@@ -101,4 +106,12 @@ const getScheduleForDepartment = async (department, targetDate = new Date()) => 
   }).sort({ effectiveDate: -1, createdAt: -1 }).lean();
 };
 
-module.exports = { getLocalParts, getDateKey, getUtcDateForKey, getDayBoundsForKey, isAttendanceForCurrentWorkday, classifyCheckIn, getScheduleForDepartment };
+module.exports = {
+  getLocalParts,
+  getDateKey,
+  getUtcDateForKey,
+  getDayBoundsForKey,
+  isAttendanceForCurrentWorkday,
+  classifyCheckIn,
+  getScheduleForDepartment
+};

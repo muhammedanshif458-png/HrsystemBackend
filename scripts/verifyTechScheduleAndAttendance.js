@@ -71,7 +71,7 @@ async function runVerification() {
   console.log('Step 2: Configuring Tech Department Schedule via authenticated API...');
   const schedulePayload = {
     department: 'Tech',
-    checkInTime: '09:00',
+    checkInTime: '10:00',
     gracePeriodMinutes: 0,
     timezone: 'Asia/Kolkata',
     effectiveDate: '2026-10-23',
@@ -111,8 +111,8 @@ async function runVerification() {
   if (savedSchedule.department !== 'TECH') {
     throw new Error(`Expected department TECH, got ${savedSchedule.department}`);
   }
-  if (savedSchedule.checkInTime !== '09:00') {
-    throw new Error(`Expected checkInTime 09:00, got ${savedSchedule.checkInTime}`);
+  if (savedSchedule.checkInTime !== '10:00') {
+    throw new Error(`Expected checkInTime 10:00, got ${savedSchedule.checkInTime}`);
   }
   if (savedSchedule.gracePeriodMinutes !== 0) {
     throw new Error(`Expected gracePeriodMinutes 0, got ${savedSchedule.gracePeriodMinutes}`);

@@ -581,11 +581,12 @@ class StaffService {
         isLate: isLateRec,
         late: isLateRec,
         minutesLate: rec.minutesLate || 0,
-        scheduledCheckIn: snapshot?.scheduledCheckIn || null,
-        scheduledCheckOut: snapshot?.scheduledCheckOut || null,
-        scheduleTimeZone: snapshot?.timezone || null,
-        timezone: snapshot?.timezone || null,
-        gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0,
+        scheduleConfigured: Boolean(rec.scheduleConfigured || rec.scheduleStatus === 'CONFIGURED' || snapshot || rec.scheduledCheckIn),
+        scheduledCheckIn: rec.scheduledCheckIn || snapshot?.scheduledCheckIn || null,
+        scheduledCheckOut: rec.scheduledCheckOut || snapshot?.scheduledCheckOut || '18:00',
+        scheduleTimeZone: rec.scheduleTimeZone || snapshot?.timezone || 'Asia/Kolkata',
+        timezone: rec.scheduleTimeZone || snapshot?.timezone || 'Asia/Kolkata',
+        gracePeriodMinutes: typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : (typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0),
         scheduleSnapshot: snapshot
       };
     });

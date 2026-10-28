@@ -41,8 +41,8 @@ const breakItemSchema = new mongoose.Schema(
   {
     _id: true,
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toJSON: { virtuals: true, getters: true },
+    toObject: { virtuals: true, getters: true }
   }
 );
 
@@ -68,8 +68,38 @@ const attendanceSchema = new mongoose.Schema(
     late: { type: Boolean, default: false },
     workMode: { type: String, trim: true, default: null },
     scheduleConfigured: { type: Boolean, default: false },
-    scheduledCheckIn: { type: String, default: null },
-    scheduleTimeZone: { type: String, default: null },
+    scheduledCheckIn: {
+      type: String,
+      default: null,
+      get: function(val) {
+        return val || this.scheduleSnapshot?.scheduledCheckIn || null;
+      }
+    },
+    scheduledCheckOut: {
+      type: String,
+      default: null,
+      get: function(val) {
+        return val || this.scheduleSnapshot?.scheduledCheckOut || null;
+      }
+    },
+    gracePeriodMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+      get: function(val) {
+        if (typeof val === 'number') return val;
+        return typeof this.scheduleSnapshot?.gracePeriodMinutes === 'number'
+          ? this.scheduleSnapshot.gracePeriodMinutes
+          : 0;
+      }
+    },
+    scheduleTimeZone: {
+      type: String,
+      default: null,
+      get: function(val) {
+        return val || this.scheduleSnapshot?.timezone || null;
+      }
+    },
     checkOut: {
       type: Date,
       default: null
@@ -170,8 +200,8 @@ const attendanceSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toJSON: { virtuals: true, getters: true },
+    toObject: { virtuals: true, getters: true }
   }
 );
 
@@ -181,10 +211,6 @@ attendanceSchema.index({ date: 1, status: 1 });
 attendanceSchema.index({ date: 1, isLate: 1 });
 
 // Virtual getters for backward compatibility with existing consumers (e.g. Flutter HR Dashboard)
-attendanceSchema.virtual('scheduledCheckOut').get(function() {
-  return this.scheduleSnapshot?.scheduledCheckOut || null;
-});
-
 attendanceSchema.virtual('timezone').get(function() {
   return this.scheduleTimeZone || this.scheduleSnapshot?.timezone || null;
 });
@@ -230,12 +256,6 @@ attendanceSchema.virtual('breakDuration').get(function() {
   if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
   if (hours > 0) return `${hours}h`;
   return `${mins}m`;
-});
-
-attendanceSchema.virtual('gracePeriodMinutes').get(function() {
-  return typeof this.scheduleSnapshot?.gracePeriodMinutes === 'number'
-    ? this.scheduleSnapshot.gracePeriodMinutes
-    : 0;
 });
 
 const Attendance = mongoose.model('Attendance', attendanceSchema);

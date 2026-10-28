@@ -88,7 +88,7 @@ departmentScheduleSchema.index({ department: 1, effectiveDate: -1, createdAt: -1
 departmentScheduleSchema.statics.toCanonicalDeptKey = function(deptName) {
   if (!deptName) return '';
   const d = deptName.trim().toUpperCase();
-  if (d.includes('TECH') || d.includes('ENGINEERING')) return 'TECH';
+  if (d.includes('TECH') || d.includes('ENGINEERING') || d === 'IT' || d.includes('SOFTWARE') || d.includes('DEVELOP')) return 'TECH';
   if (d.includes('TELE') || d.includes('CALLING') || d.includes('CLIENT')) return 'TELECALLING';
   return d;
 };
@@ -99,12 +99,13 @@ departmentScheduleSchema.statics.toCanonicalDeptKey = function(deptName) {
  */
 departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmentName, targetDate = new Date()) {
   if (!departmentName) return null;
-  const rawDept = departmentName.trim();
+  const rawDept = String(departmentName).trim();
   const canonicalDept = this.toCanonicalDeptKey(departmentName);
 
   const dateObj = new Date(targetDate);
-  const endOfTargetDate = new Date(dateObj);
-  endOfTargetDate.setUTCHours(23, 59, 59, 999);
+  const validDate = isNaN(dateObj.getTime()) ? new Date() : dateObj;
+  const dateKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(validDate);
+  const endOfTargetDate = new Date(`${dateKey}T23:59:59.999+05:30`);
 
   const deptQuery = [
     { department: new RegExp(`^${canonicalDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },

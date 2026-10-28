@@ -37,8 +37,8 @@ class HRService {
       Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
       Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
       Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } })
-        .select('employee status late isLate checkIn workMode createdAt')
-        .populate('employee', 'status workMode')
+        .select('employee status late isLate checkIn workMode createdAt date scheduledCheckIn scheduleSnapshot')
+        .populate('employee', 'status workMode department')
         .sort({ checkIn: -1, createdAt: -1 })
         .lean(),
       Leave.find({ status: 'APPROVED', startDate: { $lte: endOfDay }, endDate: { $gte: startOfDay } }).select('employee').lean(),
@@ -643,32 +643,61 @@ return {
 
     const attendance = await Promise.all(
       rawAttendance.map(async (rec) => {
+        const isCurrent = isAttendanceForCurrentWorkday(rec);
         let snapshot = rec.scheduleSnapshot;
-        if (!snapshot && rec.employee?.department) {
-          const effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, rec.date || rec.checkIn || new Date());
+        let effSched = null;
+
+        if (isCurrent && rec.employee?.department) {
+          effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, new Date());
           if (effSched) {
             snapshot = {
               scheduleId: effSched._id,
               department: effSched.department,
               scheduledCheckIn: effSched.checkInTime,
               scheduledCheckOut: effSched.checkOutTime || '18:00',
-              gracePeriodMinutes: effSched.gracePeriodMinutes || 0,
+              gracePeriodMinutes: typeof effSched.gracePeriodMinutes === 'number' ? effSched.gracePeriodMinutes : 0,
+              timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
+            };
+          }
+        } else if (!snapshot && rec.employee?.department) {
+          effSched = await DepartmentSchedule.getEffectiveSchedule(rec.employee.department, rec.date || rec.checkIn || new Date());
+          if (effSched) {
+            snapshot = {
+              scheduleId: effSched._id,
+              department: effSched.department,
+              scheduledCheckIn: effSched.checkInTime,
+              scheduledCheckOut: effSched.checkOutTime || '18:00',
+              gracePeriodMinutes: typeof effSched.gracePeriodMinutes === 'number' ? effSched.gracePeriodMinutes : 0,
               timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
             };
           }
         }
 
-        const isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
-        let minutesLate = rec.minutesLate || 0;
+        let isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
+        let minutesLate = Number(rec.minutesLate) || 0;
 
-        if (isLateRec && minutesLate === 0 && rec.checkIn && snapshot?.scheduledCheckIn) {
+        if (isCurrent && rec.checkIn && snapshot?.scheduledCheckIn) {
+          const calc = calculateLateness(new Date(rec.checkIn), snapshot);
+          isLateRec = calc.isLate;
+          minutesLate = calc.minutesLate;
+        } else if (isLateRec && minutesLate === 0 && rec.checkIn && snapshot?.scheduledCheckIn) {
           const calc = calculateLateness(new Date(rec.checkIn), snapshot);
           minutesLate = calc.minutesLate;
         }
 
-        const scheduledCheckIn = rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null;
-        const scheduleTimeZone = rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || null;
+        const scheduledCheckIn = isCurrent
+          ? (snapshot?.scheduledCheckIn || snapshot?.checkInTime || rec.scheduledCheckIn || null)
+          : (rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null);
+
+        const scheduledCheckOut = isCurrent
+          ? (snapshot?.scheduledCheckOut || snapshot?.checkOutTime || rec.scheduledCheckOut || '18:00')
+          : (rec.scheduledCheckOut || snapshot?.scheduledCheckOut || snapshot?.checkOutTime || '18:00');
+
+        const scheduleTimeZone = rec.scheduleTimeZone || snapshot?.timezone || snapshot?.timeZone || 'Asia/Kolkata';
         const scheduleConfigured = Boolean(rec.scheduleConfigured || rec.scheduleStatus === 'CONFIGURED' || scheduledCheckIn || snapshot);
+        const gracePeriodMinutes = typeof snapshot?.gracePeriodMinutes === 'number'
+          ? snapshot.gracePeriodMinutes
+          : (typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : 0);
 
         const workingHoursNum = Number(rec.workingHours) || 0;
         const workedHoursInt = Math.floor(workingHoursNum);
@@ -734,10 +763,10 @@ return {
           scheduleConfigured,
           scheduleStatus: scheduleConfigured ? 'CONFIGURED' : (rec.scheduleStatus || 'UNCONFIGURED'),
           scheduledCheckIn,
-          scheduledCheckOut: snapshot?.scheduledCheckOut || snapshot?.checkOutTime || null,
+          scheduledCheckOut,
           scheduleTimeZone,
           timezone: scheduleTimeZone,
-          gracePeriodMinutes: typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : (typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : 0),
+          gracePeriodMinutes,
           scheduleSnapshot: snapshot || rec.scheduleSnapshot || null,
           department: rec.employee?.department || rec.scheduleSnapshot?.department || null
         };
@@ -1225,13 +1254,16 @@ return {
     return dept;
   }
 
-  async setDepartmentSchedule(department, { checkInTime, timeZone, timezone, gracePeriodMinutes = 0 } = {}) {
+  async setDepartmentSchedule(department, { checkInTime, checkOutTime = '18:00', timeZone, timezone, gracePeriodMinutes = 0 } = {}) {
     const name = String(department || '').trim();
     if (!name || name.length > 100) throw new AppError('A valid department key is required', 400);
     if (typeof checkInTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkInTime)) {
       throw new AppError('Check-in time must use 24-hour HH:mm format', 400);
     }
-    const tz = timeZone || timezone;
+    if (checkOutTime && (typeof checkOutTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkOutTime))) {
+      throw new AppError('Check-out time must use 24-hour HH:mm format', 400);
+    }
+    const tz = timeZone || timezone || 'Asia/Kolkata';
     if (typeof tz !== 'string' || !tz.trim()) throw new AppError('IANA time zone is required', 400);
     if (!Number.isSafeInteger(gracePeriodMinutes) || gracePeriodMinutes < 0) {
       throw new AppError('Grace period must be a non-negative integer', 400);
@@ -1241,11 +1273,34 @@ return {
     } catch (_) {
       throw new AppError('Invalid time zone', 400);
     }
-    const exists = await Employee.exists({ department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    const canonicalDept = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(name) : name.toUpperCase();
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const exists = await Employee.exists({
+      $or: [
+        { department: new RegExp(`^${escaped}$`, 'i') },
+        { department: new RegExp(`^${canonicalDept}$`, 'i') }
+      ]
+    });
     if (!exists) throw new AppError('Department not found', 404);
+    const effectiveCheckOut = checkOutTime || '18:00';
     return DepartmentSchedule.findOneAndUpdate(
-      { department: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-      { $set: { department: name, checkInTime, timeZone: tz, timezone: tz, gracePeriodMinutes } },
+      {
+        $or: [
+          { department: canonicalDept },
+          { department: new RegExp(`^${escaped}$`, 'i') }
+        ]
+      },
+      {
+        $set: {
+          department: name,
+          departmentDisplay: name,
+          checkInTime,
+          checkOutTime: effectiveCheckOut,
+          timeZone: tz,
+          timezone: tz,
+          gracePeriodMinutes
+        }
+      },
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
   }
