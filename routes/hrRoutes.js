@@ -92,11 +92,13 @@ router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessa
 router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 
-// Staff Daily Work Updates (Authorized HR/Super Admin retrieval only - HR cannot create updates)
+// Staff Daily Work Updates (Authorized HR/Super Admin retrieval & bulk permanent deletion)
 router.get('/daily-updates', hrDailyUpdatesQueryValidator, dailyUpdateController.getHRDailyUpdates);
+router.delete('/daily-updates/all', dailyUpdateController.clearAllDailyUpdates);
+router.post('/daily-updates/clear-all', dailyUpdateController.clearAllDailyUpdates);
+router.delete('/daily-updates', dailyUpdateController.bulkDeleteDailyUpdates);
+router.post('/daily-updates/bulk-delete', dailyUpdateController.bulkDeleteDailyUpdates);
 router.get('/daily-updates/:id', mongoIdParamValidator, dailyUpdateController.getHRDailyUpdateById);
 router.get('/employees/:id/daily-updates', dailyUpdateController.getEmployeeDailyUpdates);
 
 module.exports = router;
-
-

@@ -320,6 +320,49 @@ class DailyUpdateService {
 
     return await this.getHRDailyUpdates({ ...query, employeeId: employee._id.toString() });
   }
+
+  /**
+   * HR / Super Admin: Bulk delete selected daily work updates permanently.
+   * Targets only the DailyUpdate collection and the intended IDs.
+   * Does not touch employees, attendance, tasks, leaves, or other collections.
+   */
+  async bulkDeleteDailyUpdates(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new AppError('Please provide an array of update IDs to delete', 400);
+    }
+
+    const validIds = [...new Set(ids)]
+      .map((id) => (id ? String(id).trim() : ''))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    if (validIds.length === 0) {
+      throw new AppError('No valid daily update IDs provided for deletion', 400);
+    }
+
+    // Permanent hard deletion from DailyUpdate collection only
+    const result = await DailyUpdate.deleteMany({ _id: { $in: validIds } });
+
+    return {
+      deletedCount: result.deletedCount,
+      requestedCount: ids.length,
+      validCount: validIds.length
+    };
+  }
+
+  /**
+   * HR / Super Admin: Permanently clear all daily work updates.
+   * Targets only the DailyUpdate collection.
+   * Does not touch employees, attendance, tasks, leaves, or other collections.
+   */
+  async clearAllDailyUpdates() {
+    // Permanent hard deletion of all daily work updates
+    const result = await DailyUpdate.deleteMany({});
+
+    return {
+      deletedCount: result.deletedCount
+    };
+  }
 }
 
 module.exports = new DailyUpdateService();

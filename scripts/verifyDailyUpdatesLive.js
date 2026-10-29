@@ -69,21 +69,21 @@ const run = async () => {
 
   try {
     // 1. Setup isolated in-memory MongoDB
-    console.log('[1/12] Setting up isolated database...');
+    console.log('[1/15] Setting up isolated database...');
     mongod = await MongoMemoryServer.create();
     const mongoUri = mongod.getUri();
     await mongoose.connect(mongoUri);
     console.log('  ✓ Connected to isolated MongoDB database.');
 
     // 2. Start HTTP server
-    console.log('[2/12] Starting test HTTP server...');
+    console.log('[2/15] Starting test HTTP server...');
     server = http.createServer(app);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
     console.log(`  ✓ Test HTTP server listening on port ${port}`);
 
     // 3. Seed users & accounts
-    console.log('[3/12] Seeding test accounts (Super Admin, HR Admin, Staff A, Staff B)...');
+    console.log('[3/15] Seeding test accounts (Super Admin, HR Admin, Staff A, Staff B)...');
     
     // Super Admin
     const superAdminUser = await User.create({
@@ -153,7 +153,7 @@ const run = async () => {
     console.log('  ✓ Test accounts and employee records successfully seeded.');
 
     // 4. Test Unauthenticated Requests (401)
-    console.log('\n[4/12] Testing unauthenticated access (HTTP 401)...');
+    console.log('\n[4/15] Testing unauthenticated access (HTTP 401)...');
     const unauthPost = await makeRequest(server, 'POST', '/api/staff/daily-updates', {}, { updateText: 'Testing without token' });
     if (unauthPost.statusCode !== 401) {
       throw new Error(`Expected 401 for unauthenticated POST, got HTTP ${unauthPost.statusCode}`);
@@ -166,7 +166,7 @@ const run = async () => {
     console.log('  ✓ Both Staff submission and HR retrieval properly rejected with 401 Unauthorized.');
 
     // 5. Test Role-Based Authorization Guards (403)
-    console.log('\n[5/12] Testing role-based authorization guards (HTTP 403)...');
+    console.log('\n[5/15] Testing role-based authorization guards (HTTP 403)...');
     // HR cannot call staff submission endpoint
     const hrSubmitRes = await makeRequest(server, 'POST', '/api/staff/daily-updates', {
       Authorization: `Bearer ${hrToken}`
@@ -185,7 +185,7 @@ const run = async () => {
     console.log('  ✓ HR rejected on Staff portal (403) and Staff rejected on HR dashboard (403).');
 
     // 6. Test Input Validation (422)
-    console.log('\n[6/12] Testing input validation for updateText & date (HTTP 422)...');
+    console.log('\n[6/15] Testing input validation for updateText & date (HTTP 422)...');
     // Missing updateText
     const emptyTextRes = await makeRequest(server, 'POST', '/api/staff/daily-updates', {
       Authorization: `Bearer ${staffAToken}`
@@ -214,7 +214,7 @@ const run = async () => {
     console.log(`  ✓ Invalid hoursWorked (>24) rejected with 422: "${badHoursRes.body.errors?.[0]?.message}"`);
 
     // 7. Test Staff Submission & Identity Protection
-    console.log('\n[7/12] Submitting daily work update through Staff API & verifying identity spoofing protection...');
+    console.log('\n[7/15] Submitting daily work update through Staff API & verifying identity spoofing protection...');
     const spoofAttemptRes = await makeRequest(server, 'POST', '/api/staff/daily-updates', {
       Authorization: `Bearer ${staffAToken}`
     }, {
@@ -251,7 +251,7 @@ const run = async () => {
     console.log(`  ✓ Identity strictly verified from JWT: staffId=${createdUpdate.staffId}, employeeId=${createdUpdate.employeeId}, dept=${createdUpdate.department}`);
 
     // 8. Verify Record Persisted in MongoDB
-    console.log('\n[8/12] Verifying record persistence in MongoDB collection "dailyupdates"...');
+    console.log('\n[8/15] Verifying record persistence in MongoDB collection "dailyupdates"...');
     const dbRecord = await DailyUpdate.findById(createdUpdate.id);
     if (!dbRecord) {
       throw new Error(`Record ${createdUpdate.id} was NOT found in MongoDB!`);
@@ -274,7 +274,7 @@ const run = async () => {
     console.log('  ✓ Record verified in MongoDB with correct fields, types, and references.');
 
     // 9. Staff Retrieves Own Updates & Privacy Isolation
-    console.log('\n[9/12] Verifying staff isolation: staff can only see their own updates...');
+    console.log('\n[9/15] Verifying staff isolation: staff can only see their own updates...');
     const staffAGetRes = await makeRequest(server, 'GET', '/api/staff/daily-updates', {
       Authorization: `Bearer ${staffAToken}`
     });
@@ -316,7 +316,7 @@ const run = async () => {
     console.log('  ✓ Staff B submitted own daily update successfully.');
 
     // 10. HR & Super Admin Retrieval
-    console.log('\n[10/12] Retrieving updates as HR Admin and Super Admin...');
+    console.log('\n[10/15] Retrieving updates as HR Admin and Super Admin...');
     const hrListRes = await makeRequest(server, 'GET', '/api/hr/daily-updates', {
       Authorization: `Bearer ${hrToken}`
     });
@@ -343,7 +343,7 @@ const run = async () => {
     console.log('  ✓ Response schema contract verified: id, staffId, employeeId, employeeName, department, title, date, updateText, and createdAt present.');
 
     // 11. Filtering and Pagination
-    console.log('\n[11/12] Testing department, employee, date filtering and pagination...');
+    console.log('\n[11/15] Testing department, employee, date filtering and pagination...');
     
     // Filter by department=Tech
     const techOnlyRes = await makeRequest(server, 'GET', '/api/hr/daily-updates?department=Tech', {
@@ -391,15 +391,96 @@ const run = async () => {
     console.log('  ✓ Pagination verified: page=1, limit=1 returned 1 item with total=2, totalPages=2.');
 
     // 12. Security: Verify no credential leakage
-    console.log('\n[12/12] Verifying no passwords, hashes, or tokens are leaked in responses...');
+    console.log('\n[12/15] Verifying no passwords, hashes, or tokens are leaked in responses...');
     const rawResponseBody = JSON.stringify(hrListRes.body);
     if (rawResponseBody.includes('password') || rawResponseBody.includes('refreshToken')) {
       throw new Error('SECURITY VIOLATION: Sensitive authentication fields exposed in daily updates response!');
     }
     console.log('  ✓ Security check passed: no credentials or sensitive tokens exposed.');
 
+    // 13. Bulk Delete authorization and validation checks
+    console.log('\n[13/15] Testing bulk delete authorization & input validation...');
+    // Staff role attempting to bulk delete
+    const staffDeleteRes = await makeRequest(server, 'DELETE', '/api/hr/daily-updates', {
+      Authorization: `Bearer ${staffAToken}`
+    }, { ids: [createdUpdate.id] });
+    if (staffDeleteRes.statusCode !== 403) {
+      throw new Error(`Expected 403 Forbidden for Staff bulk deletion, got ${staffDeleteRes.statusCode}`);
+    }
+    console.log('  ✓ Staff role properly blocked from bulk deleting updates (403 Forbidden).');
+
+    // Empty list rejected
+    const emptyDeleteRes = await makeRequest(server, 'DELETE', '/api/hr/daily-updates', {
+      Authorization: `Bearer ${hrToken}`
+    }, { ids: [] });
+    if (emptyDeleteRes.statusCode !== 400) {
+      throw new Error(`Expected 400 for empty IDs list, got ${emptyDeleteRes.statusCode}`);
+    }
+    console.log('  ✓ Empty selection rejected with 400 Bad Request.');
+
+    // Invalid ObjectId strings rejected
+    const invalidIdRes = await makeRequest(server, 'DELETE', '/api/hr/daily-updates', {
+      Authorization: `Bearer ${hrToken}`
+    }, { ids: ['not-a-mongo-id'] });
+    if (invalidIdRes.statusCode !== 400) {
+      throw new Error(`Expected 400 for invalid MongoDB IDs, got ${invalidIdRes.statusCode}`);
+    }
+    console.log('  ✓ Invalid MongoDB IDs rejected with 400 Bad Request.');
+
+    // 14. Bulk Delete selected updates
+    console.log('\n[14/15] Testing bulk delete of selected daily work updates...');
+    const allUpdatesRes = await makeRequest(server, 'GET', '/api/hr/daily-updates', {
+      Authorization: `Bearer ${hrToken}`
+    });
+    const updateToDelete = allUpdatesRes.body.data[0];
+    const updateToKeep = allUpdatesRes.body.data[1];
+    const initialEmployeeCount = await Employee.countDocuments();
+
+    const deleteSelectedRes = await makeRequest(server, 'DELETE', '/api/hr/daily-updates', {
+      Authorization: `Bearer ${hrToken}`
+    }, { ids: [updateToDelete.id] });
+    if (deleteSelectedRes.statusCode !== 200 || deleteSelectedRes.body.data.deletedCount !== 1) {
+      throw new Error(`Bulk delete failed: ${JSON.stringify(deleteSelectedRes.body)}`);
+    }
+    console.log('  ✓ Selected daily work update deleted successfully (HTTP 200).');
+
+    // Verify deleted update is permanently gone from database
+    const checkDeleted = await DailyUpdate.findById(updateToDelete.id);
+    if (checkDeleted) {
+      throw new Error('Deleted update still found in database! Soft deletion or non-deletion detected.');
+    }
+    const checkKept = await DailyUpdate.findById(updateToKeep.id);
+    if (!checkKept) {
+      throw new Error('Unselected update was unintentionally removed!');
+    }
+    const afterEmployeeCount = await Employee.countDocuments();
+    if (afterEmployeeCount !== initialEmployeeCount) {
+      throw new Error('Employee records were unintentionally modified or deleted!');
+    }
+    console.log('  ✓ Target update permanently removed; unselected update & employee records untouched.');
+
+    // 15. Clear All updates
+    console.log('\n[15/15] Testing permanent Clear All daily work updates...');
+    const clearAllRes = await makeRequest(server, 'DELETE', '/api/hr/daily-updates/all', {
+      Authorization: `Bearer ${superAdminToken}`
+    });
+    if (clearAllRes.statusCode !== 200 || clearAllRes.body.data.deletedCount < 1) {
+      throw new Error(`Clear all failed: ${JSON.stringify(clearAllRes.body)}`);
+    }
+    console.log('  ✓ Clear All daily work updates succeeded (HTTP 200).');
+
+    const remainingCount = await DailyUpdate.countDocuments();
+    if (remainingCount !== 0) {
+      throw new Error(`Expected 0 daily updates remaining, found ${remainingCount}`);
+    }
+    const finalEmployeeCount = await Employee.countDocuments();
+    if (finalEmployeeCount !== initialEmployeeCount) {
+      throw new Error('Employee records were affected by Clear All!');
+    }
+    console.log('  ✓ Zero daily updates remaining in collection; employee collection completely preserved.');
+
     console.log('\n========================================================================');
-    console.log('   ALL 12 END-TO-END VERIFICATION CHECKS PASSED SUCCESSFULLY!          ');
+    console.log('   ALL 15 END-TO-END VERIFICATION CHECKS PASSED SUCCESSFULLY!          ');
     console.log('========================================================================\n');
   } finally {
     if (server) {

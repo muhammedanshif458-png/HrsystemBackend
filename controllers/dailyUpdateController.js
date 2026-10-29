@@ -79,6 +79,39 @@ class DailyUpdateController {
       next(err);
     }
   }
+
+  /**
+   * HR / Super Admin: Bulk delete selected daily work updates permanently
+   * DELETE /api/hr/daily-updates
+   * POST /api/hr/daily-updates/bulk-delete
+   */
+  async bulkDeleteDailyUpdates(req, res, next) {
+    try {
+      if (req.body && req.body.all === true) {
+        const result = await dailyUpdateService.clearAllDailyUpdates();
+        return sendSuccess(res, `Successfully cleared all ${result.deletedCount} daily work updates`, result, 200);
+      }
+      const ids = req.body && req.body.ids;
+      const result = await dailyUpdateService.bulkDeleteDailyUpdates(ids);
+      return sendSuccess(res, `Successfully deleted ${result.deletedCount} daily work update(s)`, result, 200);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * HR / Super Admin: Permanently clear all daily work updates
+   * DELETE /api/hr/daily-updates/all
+   * POST /api/hr/daily-updates/clear-all
+   */
+  async clearAllDailyUpdates(req, res, next) {
+    try {
+      const result = await dailyUpdateService.clearAllDailyUpdates();
+      return sendSuccess(res, `Successfully cleared all ${result.deletedCount} daily work updates`, result, 200);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new DailyUpdateController();
