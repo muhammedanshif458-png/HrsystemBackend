@@ -23,6 +23,14 @@ const departmentChatMessageSchema = new mongoose.Schema(
       ref: 'Employee',
       default: null
     },
+    senderRole: {
+      type: String,
+      enum: {
+        values: ['HR', 'STAFF', 'SUPER_ADMIN'],
+        message: '{VALUE} is not a valid sender role'
+      },
+      default: 'STAFF'
+    },
     senderName: {
       type: String,
       required: [true, 'Sender name is required'],
@@ -67,11 +75,18 @@ const departmentChatMessageSchema = new mongoose.Schema(
     }
   },
   {
-    timestamps: true
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
   }
 );
 
+departmentChatMessageSchema.virtual('id').get(function() {
+  return this._id.toString();
+});
+
 // Indexes
+departmentChatMessageSchema.index({ departmentKey: 1, timestamp: -1 });
 departmentChatMessageSchema.index({ departmentKey: 1, timestamp: 1 });
 departmentChatMessageSchema.index({ senderId: 1 });
 

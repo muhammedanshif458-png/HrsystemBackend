@@ -3,6 +3,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
+const http = require('http');
+const socketService = require('./services/socketService');
 
 // 1. Load environment variables
 const env = require('./config/env');
@@ -111,15 +113,19 @@ app.use(notFoundMiddleware);
 // 11. Register centralized error handling middleware
 app.use(errorMiddleware);
 
-// 12. Start the server (when run directly)
-let server = null;
+// 12. Create HTTP server and initialize Socket.IO real-time engine
+const server = http.createServer(app);
+const io = socketService.initSocket(server, corsOptions);
+app.set('io', io);
+
+// Start the server (when run directly)
 if (require.main === module) {
-  // Connect to database then listen
   connectDB()
     .then(() => {
-      server = app.listen(env.port, '0.0.0.0', () => {
+      server.listen(env.port, '0.0.0.0', () => {
         logger.info(`HR Management Server is running in [${env.nodeEnv}] mode on port ${env.port}`);
         logger.info(`Health check available at http://localhost:${env.port}/api/health`);
+        logger.info(`Socket.IO real-time chat gateway active on port ${env.port}`);
       });
     })
     .catch((err) => {
@@ -144,4 +150,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server };
+module.exports = { app, server, io, socketService };

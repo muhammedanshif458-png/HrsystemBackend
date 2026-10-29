@@ -89,11 +89,15 @@ router.get('/tasks/:id', taskController.getTaskById);
 router.put('/tasks/:id', taskController.updateTask);
 router.delete('/tasks/:id', taskController.deleteTask);
 
-// Department Chat & Messaging Endpoints
+// Department Chat & Messaging Endpoints (Supports both :deptKey and :departmentKey)
 router.get('/departments/:deptKey/messages', chatController.getDepartmentMessages);
 router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessage);
+router.get('/departments/:departmentKey/messages', chatController.getDepartmentMessages);
+router.post('/departments/:departmentKey/messages', chatController.sendDepartmentMessage);
 router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
+router.delete('/departments/:departmentKey/messages/:messageId', chatController.deleteMessageForEveryone);
+router.patch('/departments/:departmentKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 
 // Staff Daily Work Updates (Authorized HR/Super Admin retrieval & bulk permanent deletion)
 router.get('/daily-updates', hrDailyUpdatesQueryValidator, dailyUpdateController.getHRDailyUpdates);

@@ -70,10 +70,21 @@ router.get('/daily-updates', dailyUpdateController.getStaffDailyUpdates);
 router.get('/daily-updates/:id', dailyUpdateIdParamValidator, dailyUpdateController.getStaffDailyUpdateById);
 
 // Department Chat & Messaging
+// Primary StaffHub conversation endpoints
+router.get('/chat/messages', chatController.getStaffMessages);
+router.post('/chat/messages', chatController.sendStaffMessage);
+router.delete('/chat/messages/:messageId', chatController.deleteMessageForEveryone);
+router.patch('/chat/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
+
+// Department-specific routes (verifies staff authorized department)
 router.get('/departments/:deptKey/messages', chatController.getDepartmentMessages);
 router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessage);
+router.get('/departments/:departmentKey/messages', chatController.getDepartmentMessages);
+router.post('/departments/:departmentKey/messages', chatController.sendDepartmentMessage);
 router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
+router.delete('/departments/:departmentKey/messages/:messageId', chatController.deleteMessageForEveryone);
+router.patch('/departments/:departmentKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 
 module.exports = router;
 
