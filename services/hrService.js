@@ -6,6 +6,8 @@ const DepartmentSchedule = require('../models/DepartmentSchedule');
 const { isAttendanceForCurrentWorkday, getDateKey, getDayBoundsForKey } = require('../utils/attendanceSchedule');
 const Leave = require('../models/Leave');
 const Task = require('../models/Task');
+const HRDocument = require('../models/HRDocument');
+const DailyUpdate = require('../models/DailyUpdate');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { summarizeAttendanceDay } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
@@ -32,10 +34,10 @@ class HRService {
       openTasks,
       resignedLast30Days
     ] = await Promise.all([
-      Employee.countDocuments(),
-      Employee.countDocuments({ status: 'ACTIVE' }),
-      Employee.countDocuments({ status: { $in: ['INACTIVE', 'TERMINATED'] } }),
-      Employee.find({ status: 'ACTIVE' }).select('_id').lean(),
+      Employee.countDocuments({ isDeleted: { $ne: true } }),
+      Employee.countDocuments({ status: 'ACTIVE', isDeleted: { $ne: true } }),
+      Employee.countDocuments({ status: 'INACTIVE', isDeleted: { $ne: true } }),
+      Employee.find({ status: 'ACTIVE', isDeleted: { $ne: true } }).select('_id').lean(),
       Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } })
         .select('employee status late isLate checkIn workMode createdAt date scheduledCheckIn scheduleSnapshot')
         .populate('employee', 'status workMode department')
@@ -45,7 +47,7 @@ class HRService {
       Leave.countDocuments({ status: 'PENDING' }),
       Leave.countDocuments({ status: 'APPROVED' }),
       Task.countDocuments({ status: { $in: ['pending', 'in-progress'] }, isDeleted: { $ne: true } }),
-      Employee.countDocuments({ status: { $in: ['TERMINATED', 'RESIGNED'] }, updatedAt: { $gte: thirtyDaysAgo } })
+      Employee.countDocuments({ status: { $in: ['TERMINATED', 'RESIGNED'] }, isDeleted: { $ne: true }, updatedAt: { $gte: thirtyDaysAgo } })
     ]);
     const metrics = summarizeAttendanceDay({
       activeEmployeeIds: active.map(employee => employee._id),
@@ -59,6 +61,7 @@ class HRService {
       totalEmployees,
       activeEmployees,
       inactiveEmployees,
+      resignedEmployees: await Employee.countDocuments({ status: 'RESIGNED', isDeleted: { $ne: true } }),
       eligibleEmployees,
       notCheckedIn,
       openTasks,
@@ -73,12 +76,18 @@ class HRService {
   /**
    * Get list of employees with search, filter, and pagination
    */
-  async getEmployees({ page = 1, limit = 20, search = '', department, designation, status, employmentType }) {
+  async getEmployees({ page = 1, limit = 20, search = '', department, designation, status, employmentType, includeDeleted = false }) {
         page = Math.max(1, parseInt(page, 10));
         limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
         const skip = (page - 1) * limit;
 
         const filter = {};
+
+        if (includeDeleted === true || includeDeleted === 'true') {
+          filter.isDeleted = true;
+        } else {
+          filter.isDeleted = { $ne: true };
+        }
 
         if(search && search.trim() !== '') {
           const regex = new RegExp(search.trim(), 'i');
@@ -94,7 +103,14 @@ class HRService {
 
   if(department) filter.department = new RegExp(`^${department.trim()}$`, 'i');
   if(designation) filter.designation = new RegExp(`^${designation.trim()}$`, 'i');
-  if(status) filter.status = status;
+  if(status && status.trim() !== '') {
+    const s = status.trim().toUpperCase();
+    if (s === 'DELETED') {
+      filter.isDeleted = true;
+    } else if (s !== 'ALL') {
+      filter.status = s;
+    }
+  }
   if(employmentType) filter.employmentType = employmentType;
 
   const[employees, total] = await Promise.all([
@@ -114,7 +130,12 @@ const enrichedEmployees = employees.map(emp => ({
   id: emp._id ? emp._id.toString() : '',
   name: `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
   phoneNumber: emp.phone || '',
-  role: emp.designation || (emp.user?.role === 'HR' ? 'HR' : 'Staff')
+  role: emp.designation || (emp.user?.role === 'HR' ? 'HR' : 'Staff'),
+  employmentStatus: emp.status,
+  isResigned: emp.status === 'RESIGNED',
+  isDeactivated: emp.status === 'INACTIVE',
+  resignationDate: emp.resignationDate || null,
+  resignationReason: emp.resignationReason || ''
 }));
 
 return {
@@ -419,7 +440,21 @@ return {
   if (updateData.phone !== undefined) user.phone = updateData.phone;
   if (updateData.profileImage !== undefined) user.profileImage = updateData.profileImage;
   if (updateData.status) {
-    user.isActive = updateData.status === 'ACTIVE';
+    const validStatuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'];
+    if (!validStatuses.includes(updateData.status)) {
+      throw new AppError(`Invalid status '${updateData.status}'. Allowed: ${validStatuses.join(', ')}`, 400);
+    }
+    if (employee.status === 'RESIGNED' && updateData.status !== 'RESIGNED') {
+      throw new AppError('Cannot change status of a resigned employee. Formal resignation cannot be altered via employee update.', 400);
+    }
+    if (updateData.status === 'RESIGNED') {
+      employee.resignationDate = updateData.resignationDate ? new Date(updateData.resignationDate) : (employee.resignationDate || new Date());
+      employee.resignationReason = (updateData.resignationReason || updateData.reason || employee.resignationReason || '').trim();
+    }
+    user.isActive = (updateData.status === 'ACTIVE' || updateData.status === 'ON_LEAVE');
+    if (!user.isActive) {
+      user.refreshToken = null;
+    }
   }
   if (passwordToUpdate) {
     user.password = passwordToUpdate; // triggers pre('save') bcrypt hashing
@@ -456,20 +491,149 @@ return {
 }
 
   /**
-   * Delete or deactivate employee
+   * Delete employee safely preserving referential integrity
    */
+  async deleteEmployee(id, { force = false, hard = false } = {}) {
+    const employee = await this.getEmployeeById(id);
 
-  async deleteEmployee(id) {
-  const employee = await this.getEmployeeById(id);
+    const [attendanceCount, leaveCount, taskCount, documentCount, updateCount] = await Promise.all([
+      Attendance.countDocuments({ employee: employee._id }),
+      Leave.countDocuments({ employee: employee._id }),
+      Task.countDocuments({ $or: [{ employee: employee._id }, { assignedTo: employee._id }] }),
+      HRDocument.countDocuments({ employee: employee._id }),
+      DailyUpdate.countDocuments({ employee: employee._id })
+    ]);
+    const totalRelations = attendanceCount + leaveCount + taskCount + documentCount + updateCount;
 
-  employee.status = 'INACTIVE';
-  await employee.save();
+    if (hard) {
+      if (totalRelations > 0 && !force) {
+        throw new AppError(
+          `Cannot permanently delete employee with ${totalRelations} related records across Attendance, Leaves, Tasks, Documents or Daily Updates. Permanent deletion would violate data integrity. Specify force=true if authorized, or use standard safe deletion.`,
+          409
+        );
+      }
+      await Employee.findByIdAndDelete(employee._id);
+      if (employee.user) {
+        const userId = employee.user._id || employee.user;
+        await User.findByIdAndDelete(userId);
+      }
+      return {
+        message: 'Employee permanently deleted successfully',
+        employeeId: employee.employeeId,
+        hardDeleted: true,
+        historicalRecordsPreserved: false
+      };
+    }
 
-  // Deactivate linked User account
-  await User.findByIdAndUpdate(employee.user, { isActive: false });
+    // Standard safe deletion: soft-delete employee and deactivate user
+    employee.isDeleted = true;
+    employee.deletedAt = new Date();
+    if (employee.status === 'ACTIVE') {
+      employee.status = 'INACTIVE';
+    }
+    await employee.save();
 
-  return { message: 'Employee deactivated successfully' };
-}
+    if (employee.user) {
+      const userId = employee.user._id || employee.user;
+      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+    }
+
+    return {
+      message: 'Employee deleted successfully. Historical records preserved.',
+      employeeId: employee.employeeId,
+      softDeleted: true,
+      historicalRecordsPreserved: true,
+      relatedRecordsCount: totalRelations
+    };
+  }
+
+  /**
+   * Deactivate an employee (POST /api/hr/employees/:id/deactivate)
+   */
+  async deactivateEmployee(id, { reason = '' } = {}) {
+    const employee = await this.getEmployeeById(id);
+
+    if (employee.isDeleted) {
+      throw new AppError('Cannot deactivate a deleted employee', 400);
+    }
+    if (employee.status === 'RESIGNED') {
+      throw new AppError('Cannot deactivate a resigned employee. Employee is already formally marked as resigned.', 400);
+    }
+    if (employee.status === 'INACTIVE') {
+      throw new AppError('Employee is already inactive', 400);
+    }
+
+    employee.status = 'INACTIVE';
+    await employee.save();
+
+    if (employee.user) {
+      const userId = employee.user._id || employee.user;
+      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+    }
+
+    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+  }
+
+  /**
+   * Reactivate a deactivated employee (POST /api/hr/employees/:id/reactivate)
+   */
+  async reactivateEmployee(id) {
+    const employee = await this.getEmployeeById(id);
+
+    if (employee.isDeleted) {
+      throw new AppError('Cannot reactivate a deleted employee', 400);
+    }
+    if (employee.status === 'RESIGNED') {
+      throw new AppError('Cannot reactivate a formally resigned employee. Resignation cannot be reversed through standard reactivation.', 400);
+    }
+    if (employee.status === 'ACTIVE') {
+      throw new AppError('Employee is already active', 400);
+    }
+
+    employee.status = 'ACTIVE';
+    await employee.save();
+
+    if (employee.user) {
+      const userId = employee.user._id || employee.user;
+      await User.findByIdAndUpdate(userId, { isActive: true });
+    }
+
+    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+  }
+
+  /**
+   * Formally mark an employee as resigned (POST /api/hr/employees/:id/resign)
+   */
+  async resignEmployee(id, { resignationDate, reason = '' } = {}) {
+    const employee = await this.getEmployeeById(id);
+
+    if (employee.isDeleted) {
+      throw new AppError('Cannot mark a deleted employee as resigned', 400);
+    }
+    if (employee.status === 'RESIGNED') {
+      throw new AppError('Employee has already resigned', 400);
+    }
+
+    let parsedDate = new Date();
+    if (resignationDate) {
+      parsedDate = new Date(resignationDate);
+      if (isNaN(parsedDate.getTime())) {
+        throw new AppError('Invalid resignation date provided', 400);
+      }
+    }
+
+    employee.status = 'RESIGNED';
+    employee.resignationDate = parsedDate;
+    employee.resignationReason = (reason || '').trim();
+    await employee.save();
+
+    if (employee.user) {
+      const userId = employee.user._id || employee.user;
+      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+    }
+
+    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+  }
   /**
    * Update employee salary with history tracking
    */
@@ -1184,21 +1348,48 @@ return {
   /**
    * Update employee status (PATCH /api/hr/employees/:id/status)
    */
-  async updateEmployeeStatus(id, newStatus) {
-    const validStatuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'];
+  async updateEmployeeStatus(id, newStatus, body = {}) {
+    const validStatuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'];
     if (!validStatuses.includes(newStatus)) {
       throw new AppError(`Invalid status '${newStatus}'. Allowed: ${validStatuses.join(', ')}`, 400);
     }
 
     const employee = await this.getEmployeeById(id);
+
+    if (employee.isDeleted) {
+      throw new AppError('Cannot update status of a deleted employee', 400);
+    }
+
+    if (newStatus === 'RESIGNED') {
+      return await this.resignEmployee(id, {
+        resignationDate: body.resignationDate,
+        reason: body.resignationReason || body.reason || ''
+      });
+    }
+
+    if (employee.status === 'RESIGNED') {
+      throw new AppError('Cannot change status of a resigned employee. Formal resignation cannot be altered via status update.', 400);
+    }
+
+    if (newStatus === 'ACTIVE' && employee.status === 'INACTIVE') {
+      return await this.reactivateEmployee(id);
+    }
+
+    if (newStatus === 'INACTIVE' && employee.status === 'ACTIVE') {
+      return await this.deactivateEmployee(id, { reason: body.reason });
+    }
+
     employee.status = newStatus;
     await employee.save();
 
     // Sync user active flag
-    if (newStatus === 'ACTIVE') {
-      await User.findByIdAndUpdate(employee.user, { isActive: true });
-    } else {
-      await User.findByIdAndUpdate(employee.user, { isActive: false });
+    if (employee.user) {
+      const userId = employee.user._id || employee.user;
+      if (newStatus === 'ACTIVE' || newStatus === 'ON_LEAVE') {
+        await User.findByIdAndUpdate(userId, { isActive: true });
+      } else {
+        await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+      }
     }
 
     return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');

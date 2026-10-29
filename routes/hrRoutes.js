@@ -47,6 +47,9 @@ router.get('/employees/:id', hrController.getEmployeeById);
 router.put('/employees/:id', updateEmployeeValidator, hrController.updateEmployee);
 router.delete('/employees/:id', hrController.deleteEmployee);
 router.patch('/employees/:id/status', hrController.updateStatus);
+router.post('/employees/:id/deactivate', hrController.deactivateEmployee);
+router.post('/employees/:id/reactivate', hrController.reactivateEmployee);
+router.post('/employees/:id/resign', hrController.resignEmployee);
 
 // Salary management with history tracking
 router.put('/employees/:id/salary', mongoIdParamValidator, hrController.updateSalary);

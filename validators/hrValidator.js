@@ -60,8 +60,8 @@ const createEmployeeValidator = [
     .isFloat({ min: 0 }).withMessage('Salary must be a non-negative number'),
   body('status')
     .optional()
-    .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'])
-    .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, or TERMINATED'),
+    .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'])
+    .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, TERMINATED, or RESIGNED'),
   body('gender')
     .optional()
     .isIn(['MALE', 'FEMALE', 'OTHER'])
@@ -145,8 +145,8 @@ const updateEmployeeValidator = [
     .isFloat({ min: 0 }).withMessage('Salary must be a non-negative number'),
   body('status')
     .optional()
-    .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'])
-    .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, or TERMINATED'),
+    .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'])
+    .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, TERMINATED, or RESIGNED'),
   body('dateOfBirth')
     .optional({ nullable: true })
     .custom((value) => {

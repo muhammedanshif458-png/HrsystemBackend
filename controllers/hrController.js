@@ -86,8 +86,47 @@ class HRController {
    */
   async deleteEmployee(req, res, next) {
     try {
-      const result = await hrService.deleteEmployee(req.params.id);
-      return sendSuccess(res, result.message, null);
+      const result = await hrService.deleteEmployee(req.params.id, {
+        force: req.query.force === 'true' || req.body?.force === true,
+        hard: req.query.hard === 'true' || req.body?.hard === true
+      });
+      return sendSuccess(res, result.message, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/employees/:id/deactivate
+   */
+  async deactivateEmployee(req, res, next) {
+    try {
+      const employee = await hrService.deactivateEmployee(req.params.id, req.body);
+      return sendSuccess(res, 'Employee deactivated successfully', employee);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/employees/:id/reactivate
+   */
+  async reactivateEmployee(req, res, next) {
+    try {
+      const employee = await hrService.reactivateEmployee(req.params.id);
+      return sendSuccess(res, 'Employee reactivated successfully', employee);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/employees/:id/resign
+   */
+  async resignEmployee(req, res, next) {
+    try {
+      const employee = await hrService.resignEmployee(req.params.id, req.body);
+      return sendSuccess(res, 'Employee marked as resigned successfully', employee);
     } catch (err) {
       next(err);
     }
@@ -194,7 +233,7 @@ class HRController {
    */
   async updateStatus(req, res, next) {
     try {
-      const employee = await hrService.updateEmployeeStatus(req.params.id, req.body.status);
+      const employee = await hrService.updateEmployeeStatus(req.params.id, req.body.status, req.body);
       return sendSuccess(res, 'Employee status updated successfully', employee);
     } catch (err) {
       next(err);

@@ -15,6 +15,7 @@
     "test:birthdays": "node scripts/verifyBirthdays.js",
     "test:staff-update": "node scripts/verifyStaffUpdateLive.js",
     "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js",
+    "test:lifecycle": "node scripts/verifyEmployeeLifecycle.js",
     "test:dashboard-attendance": "node scripts/verifyDashboardAttendanceMetrics.js"
   },
   "keywords": [

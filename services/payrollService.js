@@ -118,7 +118,7 @@ class PayrollService {
    * Get Payroll Summary for a specific month and year
    */
   async getPayrollSummary(year, month, departmentFilter = '') {
-    const filter = { status: { $ne: 'TERMINATED' } };
+    const filter = { status: { $ne: 'TERMINATED' }, isDeleted: { $ne: true } };
     if (departmentFilter && departmentFilter !== 'all') {
       filter.department = new RegExp(`^${departmentFilter.trim()}$`, 'i');
     }
@@ -151,7 +151,7 @@ class PayrollService {
    * Get itemized payroll calculations for all employees
    */
   async getEmployeesPayroll(year, month, { department, search, page = 1, limit = 50 } = {}) {
-    const filter = {};
+    const filter = { isDeleted: { $ne: true } };
     if (department && department !== 'all') {
       filter.department = new RegExp(`^${department.trim()}$`, 'i');
     }

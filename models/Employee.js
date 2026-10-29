@@ -160,10 +160,27 @@ const employeeSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'],
+        values: ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'],
         message: '{VALUE} is not a valid employee status'
       },
       default: 'ACTIVE'
+    },
+    resignationDate: {
+      type: Date,
+      default: null
+    },
+    resignationReason: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    isDeleted: {
+      type: Boolean,
+      default: false
+    },
+    deletedAt: {
+      type: Date,
+      default: null
     }
   },
   {
@@ -185,9 +202,18 @@ employeeSchema.virtual('role').get(function() {
   return this.designation || (this.user?.role === 'HR' ? 'HR' : 'Staff');
 });
 
+employeeSchema.virtual('isResigned').get(function() {
+  return this.status === 'RESIGNED';
+});
+
+employeeSchema.virtual('isDeactivated').get(function() {
+  return this.status === 'INACTIVE';
+});
+
 // Indexes for faster lookups and search
 employeeSchema.index({ department: 1 });
 employeeSchema.index({ status: 1 });
+employeeSchema.index({ isDeleted: 1 });
 employeeSchema.index({ firstName: 'text', lastName: 'text', email: 'text', department: 'text', designation: 'text' });
 
 const Employee = mongoose.model('Employee', employeeSchema);
