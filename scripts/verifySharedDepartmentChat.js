@@ -237,6 +237,22 @@ async function run() {
       body: { text: 'Spying on other department' }
     });
     assert(crossDeptPost.status === 403, 'Tech staff posting to Telecalling department chat returns 403 Forbidden');
+
+    // HR & Super Admin accessing /api/staff/departments/:deptKey/messages must succeed (not return 403 Forbidden [STAFF])
+    const saOnStaffDeptGet = await request('/api/staff/departments/tech/messages', {
+      headers: { Authorization: `Bearer ${superAdminToken}` }
+    });
+    assert(saOnStaffDeptGet.status === 200, 'Super Admin accessing /api/staff/departments/tech/messages returns 200 OK (Not 403 Forbidden)');
+
+    const hrOnStaffDeptGet = await request('/api/staff/departments/tech/messages', {
+      headers: { Authorization: `Bearer ${hrToken}` }
+    });
+    assert(hrOnStaffDeptGet.status === 200, 'HR accessing /api/staff/departments/tech/messages returns 200 OK');
+
+    const saOnHrDeptGet = await request('/api/hr/departments/tech/messages', {
+      headers: { Authorization: `Bearer ${superAdminToken}` }
+    });
+    assert(saOnHrDeptGet.status === 200, 'Super Admin accessing /api/hr/departments/tech/messages returns 200 OK');
   }
 
   // -------------------------------------------------------------------------

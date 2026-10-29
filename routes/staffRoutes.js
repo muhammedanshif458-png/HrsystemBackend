@@ -20,71 +20,75 @@ const {
   dailyUpdateIdParamValidator
 } = require('../validators/staffValidator');
 
-// Protect all Staff routes with JWT authentication and STAFF role
-router.use(authMiddleware, roleMiddleware('STAFF'));
+// Protect all Staff routes with JWT authentication
+router.use(authMiddleware);
 
+// Middleware for routes strictly reserved for STAFF role
+const staffOnly = roleMiddleware('STAFF');
+
+// Middleware for department chat routes (accessible to STAFF, HR, and SUPER_ADMIN)
+const departmentChatAuth = roleMiddleware('STAFF', 'HR', 'SUPER_ADMIN');
 
 // Dashboard
-router.get('/dashboard', staffController.getDashboard);
+router.get('/dashboard', staffOnly, staffController.getDashboard);
 
 // Company-Wide Birthdays for Staff View (Tech & Telecalling)
 const { birthdaysValidator } = require('../validators/hrValidator');
-router.get('/birthdays', birthdaysValidator, staffController.getBirthdays);
+router.get('/birthdays', staffOnly, birthdaysValidator, staffController.getBirthdays);
 
 // Profile
-router.get('/profile', staffController.getProfile);
-router.put('/profile', updateProfileValidator, staffController.updateProfile);
+router.get('/profile', staffOnly, staffController.getProfile);
+router.put('/profile', staffOnly, updateProfileValidator, staffController.updateProfile);
 
 // Documents (Staff can only view/download their own documents)
-router.get('/documents', documentController.getMyDocuments);
-router.get('/documents/:docId', documentController.getStaffDocumentById);
-router.get('/documents/:docId/download', documentController.downloadDocument);
+router.get('/documents', staffOnly, documentController.getMyDocuments);
+router.get('/documents/:docId', staffOnly, documentController.getStaffDocumentById);
+router.get('/documents/:docId/download', staffOnly, documentController.downloadDocument);
 
 // Attendance
-router.post('/attendance/check-in', checkInValidator, staffController.checkIn);
-router.post('/attendance/check-out', checkOutValidator, staffController.checkOut);
-router.post('/attendance/break-start', breakStartValidator, staffController.startBreak);
-router.post('/attendance/break-end', breakEndValidator, staffController.endBreak);
-router.post('/attendance/break/start', breakStartValidator, staffController.startBreak);
-router.post('/attendance/break/end', breakEndValidator, staffController.endBreak);
-router.post('/attendance/breaks/start', breakStartValidator, staffController.startBreak);
-router.post('/attendance/breaks/end', breakEndValidator, staffController.endBreak);
-router.post('/attendance/:attendanceId/breaks/start', breakStartValidator, staffController.startBreak);
-router.post('/attendance/:attendanceId/breaks/end', breakEndValidator, staffController.endBreak);
-router.get('/attendance', staffController.getAttendance);
+router.post('/attendance/check-in', staffOnly, checkInValidator, staffController.checkIn);
+router.post('/attendance/check-out', staffOnly, checkOutValidator, staffController.checkOut);
+router.post('/attendance/break-start', staffOnly, breakStartValidator, staffController.startBreak);
+router.post('/attendance/break-end', staffOnly, breakEndValidator, staffController.endBreak);
+router.post('/attendance/break/start', staffOnly, breakStartValidator, staffController.startBreak);
+router.post('/attendance/break/end', staffOnly, breakEndValidator, staffController.endBreak);
+router.post('/attendance/breaks/start', staffOnly, breakStartValidator, staffController.startBreak);
+router.post('/attendance/breaks/end', staffOnly, breakEndValidator, staffController.endBreak);
+router.post('/attendance/:attendanceId/breaks/start', staffOnly, breakStartValidator, staffController.startBreak);
+router.post('/attendance/:attendanceId/breaks/end', staffOnly, breakEndValidator, staffController.endBreak);
+router.get('/attendance', staffOnly, staffController.getAttendance);
 
 // Leaves
-router.post('/leaves', leaveAttachmentUpload, applyLeaveValidator, staffController.applyLeave);
-router.get('/leaves', staffController.getLeaves);
-router.get('/leaves/:id', leaveIdParamValidator, staffController.getLeaveById);
-router.delete('/leaves/:id', leaveIdParamValidator, staffController.cancelLeave);
+router.post('/leaves', staffOnly, leaveAttachmentUpload, applyLeaveValidator, staffController.applyLeave);
+router.get('/leaves', staffOnly, staffController.getLeaves);
+router.get('/leaves/:id', staffOnly, leaveIdParamValidator, staffController.getLeaveById);
+router.delete('/leaves/:id', staffOnly, leaveIdParamValidator, staffController.cancelLeave);
 
 // Tasks (Staff view and manage own tasks)
-router.get('/tasks', taskController.getStaffTasks);
-router.get('/tasks/:id', taskController.getTaskById);
-router.patch('/tasks/:id/status', taskController.updateStaffTaskStatus);
+router.get('/tasks', staffOnly, taskController.getStaffTasks);
+router.get('/tasks/:id', staffOnly, taskController.getTaskById);
+router.patch('/tasks/:id/status', staffOnly, taskController.updateStaffTaskStatus);
 
 // Daily Work Updates (Staff submits and views own daily updates)
-router.post('/daily-updates', dailyUpdateValidator, dailyUpdateController.submitDailyUpdate);
-router.get('/daily-updates', dailyUpdateController.getStaffDailyUpdates);
-router.get('/daily-updates/:id', dailyUpdateIdParamValidator, dailyUpdateController.getStaffDailyUpdateById);
+router.post('/daily-updates', staffOnly, dailyUpdateValidator, dailyUpdateController.submitDailyUpdate);
+router.get('/daily-updates', staffOnly, dailyUpdateController.getStaffDailyUpdates);
+router.get('/daily-updates/:id', staffOnly, dailyUpdateIdParamValidator, dailyUpdateController.getStaffDailyUpdateById);
 
 // Department Chat & Messaging
 // Primary StaffHub conversation endpoints
-router.get('/chat/messages', chatController.getStaffMessages);
-router.post('/chat/messages', chatController.sendStaffMessage);
-router.delete('/chat/messages/:messageId', chatController.deleteMessageForEveryone);
-router.patch('/chat/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
+router.get('/chat/messages', staffOnly, chatController.getStaffMessages);
+router.post('/chat/messages', staffOnly, chatController.sendStaffMessage);
+router.delete('/chat/messages/:messageId', staffOnly, chatController.deleteMessageForEveryone);
+router.patch('/chat/messages/:messageId/delete-for-me', staffOnly, chatController.deleteMessageForMe);
 
-// Department-specific routes (verifies staff authorized department)
-router.get('/departments/:deptKey/messages', chatController.getDepartmentMessages);
-router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessage);
-router.get('/departments/:departmentKey/messages', chatController.getDepartmentMessages);
-router.post('/departments/:departmentKey/messages', chatController.sendDepartmentMessage);
-router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
-router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
-router.delete('/departments/:departmentKey/messages/:messageId', chatController.deleteMessageForEveryone);
-router.patch('/departments/:departmentKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
+// Department-specific routes (accessible to STAFF, HR, and SUPER_ADMIN)
+router.get('/departments/:deptKey/messages', departmentChatAuth, chatController.getDepartmentMessages);
+router.post('/departments/:deptKey/messages', departmentChatAuth, chatController.sendDepartmentMessage);
+router.get('/departments/:departmentKey/messages', departmentChatAuth, chatController.getDepartmentMessages);
+router.post('/departments/:departmentKey/messages', departmentChatAuth, chatController.sendDepartmentMessage);
+router.delete('/departments/:deptKey/messages/:messageId', departmentChatAuth, chatController.deleteMessageForEveryone);
+router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', departmentChatAuth, chatController.deleteMessageForMe);
+router.delete('/departments/:departmentKey/messages/:messageId', departmentChatAuth, chatController.deleteMessageForEveryone);
+router.patch('/departments/:departmentKey/messages/:messageId/delete-for-me', departmentChatAuth, chatController.deleteMessageForMe);
 
 module.exports = router;
-
