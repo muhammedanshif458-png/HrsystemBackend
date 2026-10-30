@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const Employee = require('../models/Employee');
+const StaffLoginHistory = require('../models/StaffLoginHistory');
+const env = require('../config/env');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, generateResetToken, hashToken } = require('../utils/jwt');
 const { AppError } = require('../middleware/errorMiddleware');
 
@@ -10,7 +12,7 @@ class AuthService {
   /**
    * Login user with email and password
    */
-  async login(email, password) {
+  async login(email, password, loginContext = {}) {
     // Explicitly select password field as it is marked select: false
     const normalizedEmail = String(email || '').trim().toLowerCase();
     const user = await User.findOne({ email: normalizedEmail }).select('+password');
@@ -28,6 +30,11 @@ class AuthService {
       throw new AppError('Invalid email or password', 401);
     }
 
+    const location = loginContext.location;
+    if (env.staffLoginRequireLocation && !location) {
+      throw new AppError('Location is required to login. Enable location permission and try again.', 400);
+    }
+
     // Update last login
     user.lastLogin = new Date();
 
@@ -35,14 +42,28 @@ class AuthService {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    user.refreshToken = refreshToken;
-    await user.save();
-
     // Fetch linked employee profile if user is STAFF
     let employeeData = null;
     if (user.role === 'STAFF') {
       employeeData = (await Employee.findOne({ user: user._id })) || (await Employee.findOne({ email: user.email }));
     }
+
+    const loginAt = new Date();
+    const loginHistory = await StaffLoginHistory.create({
+      employeeId: employeeData?._id || null,
+      userId: user._id,
+      workMode: loginContext.workMode || null,
+      locationStatus: location ? 'CAPTURED' : 'NOT_PROVIDED',
+      latitude: location ? Number(location.latitude) : null,
+      longitude: location ? Number(location.longitude) : null,
+      accuracy: location ? Number(location.accuracy) : null,
+      capturedAt: location ? new Date(location.capturedAt) : null,
+      loginAt,
+      metadata: loginContext.metadata || {}
+    });
+
+    user.refreshToken = refreshToken;
+    await user.save();
 
     const userObj = user.toJSON();
     if (employeeData) {
@@ -60,6 +81,8 @@ class AuthService {
       token: accessToken,
       accessToken,
       refreshToken,
+      workMode: loginHistory.workMode,
+      loginAt: loginHistory.loginAt,
       user: userObj
     };
   }

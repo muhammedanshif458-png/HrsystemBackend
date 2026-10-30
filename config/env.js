@@ -18,6 +18,9 @@ const env = {
   },
   
   clientUrl: process.env.CLIENT_URL || 'http://localhost:51834,http://localhost:3000',
+
+  // Legacy clients may omit location. Set true to require GPS on every login.
+  staffLoginRequireLocation: process.env.STAFF_LOGIN_REQUIRE_LOCATION === 'true',
   
   seedAdmin: {
     email: process.env.SEED_ADMIN_EMAIL || 'admin@hrmanagement.com',

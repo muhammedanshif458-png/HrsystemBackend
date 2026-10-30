@@ -8,6 +8,7 @@ const Leave = require('../models/Leave');
 const Task = require('../models/Task');
 const HRDocument = require('../models/HRDocument');
 const DailyUpdate = require('../models/DailyUpdate');
+const StaffLoginHistory = require('../models/StaffLoginHistory');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { summarizeAttendanceDay } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
@@ -16,6 +17,24 @@ const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveRes
 const getDayBounds = (dateStr = null) => getDayBoundsForKey(dateStr || getDateKey(new Date(), 'Asia/Kolkata'));
 
 class HRService {
+  async getEmployeeLoginHistory(identifier, { page = 1, limit = 20 } = {}) {
+    const normalized = String(identifier || '').trim();
+    const employee = mongoose.Types.ObjectId.isValid(normalized)
+      ? await Employee.findOne({ $or: [{ _id: normalized }, { employeeId: normalized.toUpperCase() }] }).select('_id').lean()
+      : await Employee.findOne({ employeeId: normalized.toUpperCase() }).select('_id').lean();
+    if (!employee) throw new AppError('Employee not found', 404);
+
+    const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20));
+    const filter = { employeeId: employee._id };
+    const [records, total] = await Promise.all([
+      StaffLoginHistory.find(filter).sort({ loginAt: -1 }).skip((safePage - 1) * safeLimit).limit(safeLimit)
+        .select('employeeId userId workMode locationStatus latitude longitude accuracy capturedAt loginAt metadata').lean(),
+      StaffLoginHistory.countDocuments(filter)
+    ]);
+    return { records, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };
+  }
+
   /**
    * Get HR Dashboard statistics
    */

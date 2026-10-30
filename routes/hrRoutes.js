@@ -42,6 +42,7 @@ router.get('/birthdays', birthdaysValidator, hrController.getBirthdays);
 
 // Employees CRUD
 router.get('/employees', hrController.getEmployees);
+router.get('/employees/:employeeId/login-history', hrController.getEmployeeLoginHistory);
 router.post('/employees', createEmployeeValidator, hrController.createEmployee);
 router.get('/employees/:id', hrController.getEmployeeById);
 router.put('/employees/:id', updateEmployeeValidator, hrController.updateEmployee);

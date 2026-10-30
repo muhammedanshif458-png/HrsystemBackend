@@ -5,6 +5,15 @@ const { sendSuccess } = require('../utils/response');
  * HR Controller
  */
 class HRController {
+  async getEmployeeLoginHistory(req, res, next) {
+    try {
+      const { records, pagination } = await hrService.getEmployeeLoginHistory(req.params.employeeId, req.query);
+      return sendSuccess(res, 'Employee login history fetched successfully', records, 200, pagination);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /**
    * GET /api/hr/dashboard
    */

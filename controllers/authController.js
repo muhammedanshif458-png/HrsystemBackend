@@ -10,8 +10,12 @@ class AuthController {
    */
   async login(req, res, next) {
     try {
-      const { email, password } = req.body;
-      const data = await authService.login(email, password);
+      const { email, password, workMode, location } = req.body;
+      const data = await authService.login(email, password, {
+        workMode,
+        location,
+        metadata: { ip: req.ip || null, userAgent: req.get('user-agent') || null }
+      });
       return sendSuccess(res, 'Login successful', data);
     } catch (err) {
       next(err);
