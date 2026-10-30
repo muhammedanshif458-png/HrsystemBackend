@@ -17,7 +17,8 @@
     "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js",
     "test:lifecycle": "node scripts/verifyEmployeeLifecycle.js",
     "test:chat": "node scripts/verifySharedDepartmentChat.js",
-    "test:dashboard-attendance": "node scripts/verifyDashboardAttendanceMetrics.js"
+    "test:dashboard-attendance": "node scripts/verifyDashboardAttendanceMetrics.js",
+    "test:leave-bulk-delete": "node scripts/verifyLeaveBulkDelete.js"
   },
   "keywords": [
     "hr",

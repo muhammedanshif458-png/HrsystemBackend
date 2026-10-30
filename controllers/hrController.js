@@ -205,6 +205,67 @@ class HRController {
   }
 
   /**
+   * HR / Super Admin: Bulk delete selected leave requests (only APPROVED or REJECTED)
+   * DELETE /api/hr/leaves
+   * POST /api/hr/leaves/bulk-delete
+   */
+  async bulkDeleteLeaves(req, res, next) {
+    try {
+      if (req.body && (req.body.all === true || req.body.clearAll === true)) {
+        const filters = {
+          ...req.query,
+          ...req.body
+        };
+        const result = await hrService.clearAllLeaves(filters);
+        return sendSuccess(res, `Successfully cleared all ${result.deletedCount} ${result.status.toLowerCase()} leave request(s)`, result, 200);
+      }
+      let ids = (req.body && (req.body.ids || req.body.leaveIds || req.body.selectedIds)) ||
+                (req.query && (req.query.ids || req.query.leaveIds || req.query.selectedIds)) ||
+                (req.body && req.body.id ? [req.body.id] : null) ||
+                (req.query && req.query.id ? [req.query.id] : null);
+      if (typeof ids === 'string') {
+        ids = ids.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      const status = (req.body && req.body.status) || (req.query && req.query.status);
+      const result = await hrService.bulkDeleteLeaves(ids, { status });
+      return sendSuccess(res, `Successfully deleted ${result.deletedCount} leave request(s)`, result, 200);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * HR / Super Admin: Clear all eligible leave requests for an explicitly specified status (APPROVED or REJECTED)
+   * DELETE /api/hr/leaves/all
+   * POST /api/hr/leaves/clear-all
+   */
+  async clearAllLeaves(req, res, next) {
+    try {
+      const filters = {
+        ...req.query,
+        ...req.body
+      };
+      const result = await hrService.clearAllLeaves(filters);
+      return sendSuccess(res, `Successfully cleared all ${result.deletedCount} ${result.status.toLowerCase()} leave request(s)`, result, 200);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * HR / Super Admin: Delete single leave request by ID (only APPROVED or REJECTED)
+   * DELETE /api/hr/leaves/:id
+   */
+  async deleteLeaveById(req, res, next) {
+    try {
+      const result = await hrService.deleteLeaveById(req.params.id);
+      return sendSuccess(res, 'Successfully deleted leave request', result, 200);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * GET /api/hr/reports/attendance
    */
   async getAttendanceReports(req, res, next) {

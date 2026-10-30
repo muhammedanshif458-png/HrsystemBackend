@@ -69,7 +69,12 @@ router.get('/attendance/:employeeId', hrController.getAttendanceByEmployeeId);
 
 // Leaves
 router.get('/leaves', hrController.getLeaves);
+router.delete('/leaves/all', hrController.clearAllLeaves);
+router.post('/leaves/clear-all', hrController.clearAllLeaves);
+router.delete('/leaves', hrController.bulkDeleteLeaves);
+router.post('/leaves/bulk-delete', hrController.bulkDeleteLeaves);
 router.get('/leaves/:id', mongoIdParamValidator, hrController.getLeaveById);
+router.delete('/leaves/:id', mongoIdParamValidator, hrController.deleteLeaveById);
 router.put('/leaves/:id/approve', mongoIdParamValidator, hrController.approveLeave);
 router.put('/leaves/:id/reject', rejectLeaveValidator, hrController.rejectLeave);
 

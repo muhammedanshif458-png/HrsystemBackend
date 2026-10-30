@@ -1105,6 +1105,203 @@ return {
   }
 
   /**
+   * HR / Super Admin: Bulk delete selected leave requests.
+   * Only allows permanent deletion of requests with status APPROVED or REJECTED.
+   * Rejects entire operation if any selected ID is missing, invalid, or has an ineligible status (e.g. PENDING or CANCELLED).
+   *
+   * @param {Array<string>} ids Array of MongoDB ObjectId strings
+   * @param {Object} options Optional options, e.g. { status: 'APPROVED' | 'REJECTED' }
+   * @returns {Promise<{ deletedCount: number, requestedCount: number, validCount: number }>} 
+   */
+  async bulkDeleteLeaves(ids, options = {}) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new AppError('Please provide a non-empty array of leave request IDs to delete', 400);
+    }
+
+    const cleanIds = ids.map(id => (id ? String(id).trim() : '')).filter(Boolean);
+    if (cleanIds.length === 0) {
+      throw new AppError('Please provide a non-empty array of leave request IDs to delete', 400);
+    }
+
+    // 1. Validate ID format for every ID
+    const invalidFormatIds = cleanIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidFormatIds.length > 0) {
+      throw new AppError('Invalid leave ID format: all IDs must be valid MongoDB ObjectIds. Invalid: ' + invalidFormatIds.slice(0, 3).join(', '), 400);
+    }
+
+    const uniqueIds = [...new Set(cleanIds)];
+    const objectIds = uniqueIds.map(id => new mongoose.Types.ObjectId(id));
+
+    // 2. Fetch all requested records
+    const existingLeaves = await Leave.find({ _id: { $in: objectIds } });
+
+    // 3. Verify that every requested ID exists
+    if (existingLeaves.length !== objectIds.length) {
+      const foundIdSet = new Set(existingLeaves.map(l => l._id.toString()));
+      const missingIds = uniqueIds.filter(id => !foundIdSet.has(id));
+      throw new AppError('Leave request(s) not found: ' + missingIds.join(', '), 404);
+    }
+
+    // 4. Verify status eligibility for EVERY selected record
+    const eligibleStatuses = ['APPROVED', 'REJECTED'];
+    const ineligibleLeaves = existingLeaves.filter(l => !eligibleStatuses.includes(l.status));
+    if (ineligibleLeaves.length > 0) {
+      const ineligibleSummary = [...new Set(ineligibleLeaves.map(l => l.status))].join(', ');
+      throw new AppError(
+        'Cannot delete leave request(s) with ineligible status (' + ineligibleSummary + '). Only APPROVED and REJECTED leave requests can be deleted. Pending and cancelled requests are strictly protected.',
+        400
+      );
+    }
+
+    // 5. If options.status was specified, verify that all records match that expected status
+    const targetStatuses = options.status
+      ? [String(options.status).trim().toUpperCase()]
+      : eligibleStatuses;
+
+    if (options.status) {
+      const targetStatus = targetStatuses[0];
+      if (!eligibleStatuses.includes(targetStatus)) {
+        throw new AppError('Invalid status filter "' + options.status + '". Only APPROVED and REJECTED leave requests can be deleted.', 400);
+      }
+      const statusMismatches = existingLeaves.filter(l => l.status !== targetStatus);
+      if (statusMismatches.length > 0) {
+        const foundStatuses = [...new Set(statusMismatches.map(l => l.status))].join(', ');
+        throw new AppError(
+          'Selected leave request(s) do not match the expected status "' + targetStatus + '". Found status: ' + foundStatuses,
+          400
+        );
+      }
+    }
+
+    // 6. Safe permanent deletion (scoped strictly to the validated IDs and target status)
+    const result = await Leave.deleteMany({
+      _id: { $in: objectIds },
+      status: { $in: targetStatuses }
+    });
+
+    return {
+      deletedCount: result.deletedCount,
+      requestedCount: ids.length,
+      validCount: objectIds.length
+    };
+  }
+
+  /**
+   * HR / Super Admin: Clear all eligible leave requests for an explicitly specified status.
+   * Only allows clearing status APPROVED or REJECTED.
+   * Requires status to be explicitly provided. Indiscriminate deletion of all leaves is strictly rejected.
+   * Scopes deletion to status and any explicitly provided filters (employeeId, department, leaveType, date range).
+   *
+   * @param {Object} filters
+   * @returns {Promise<{ deletedCount: number, status: string, filtersApplied: Object }>} 
+   */
+  async clearAllLeaves(filters = {}) {
+    if (!filters.status || typeof filters.status !== 'string' || !filters.status.trim()) {
+      throw new AppError(
+        'A status of APPROVED or REJECTED is required when clearing leave requests. Indiscriminate deletion of all leave requests is strictly forbidden.',
+        400
+      );
+    }
+
+    const eligibleStatuses = ['APPROVED', 'REJECTED'];
+    const normalizedStatus = filters.status.trim().toUpperCase();
+    if (!eligibleStatuses.includes(normalizedStatus)) {
+      throw new AppError(
+        'Cannot clear leave requests with status "' + filters.status + '". Only APPROVED and REJECTED leave requests can be cleared. Pending requests must not be cleared.',
+        400
+      );
+    }
+
+    const deleteFilter = { status: normalizedStatus };
+
+    // Filter by employee (Mongo ID or string employeeId like EMP1001)
+    const empIdentifier = (filters.employeeId || filters.employee || filters.staffId || '').toString().trim();
+    if (empIdentifier) {
+      const Employee = require('../models/Employee');
+      let employeeDoc = null;
+      if (mongoose.Types.ObjectId.isValid(empIdentifier)) {
+        employeeDoc = await Employee.findById(empIdentifier);
+      }
+      if (!employeeDoc) {
+        employeeDoc = await Employee.findOne({ employeeId: empIdentifier.toUpperCase() });
+      }
+      if (employeeDoc) {
+        deleteFilter.employee = employeeDoc._id;
+      } else {
+        return {
+          deletedCount: 0,
+          status: normalizedStatus,
+          filtersApplied: { employeeId: empIdentifier }
+        };
+      }
+    }
+
+    // Filter by department
+    if (filters.department && typeof filters.department === 'string' && filters.department.trim()) {
+      const Employee = require('../models/Employee');
+      const deptTrim = filters.department.trim();
+      const deptEmployees = await Employee.find({
+        $or: [
+          { department: new RegExp('^' + deptTrim + '$', 'i') },
+          { department: new RegExp(deptTrim, 'i') }
+        ],
+        isDeleted: { $ne: true }
+      }).select('_id');
+      const empIds = deptEmployees.map(e => e._id);
+      if (deleteFilter.employee) {
+        const isMatch = empIds.some(id => id.toString() === deleteFilter.employee.toString());
+        if (!isMatch) {
+          return {
+            deletedCount: 0,
+            status: normalizedStatus,
+            filtersApplied: { department: filters.department, employeeId: empIdentifier }
+          };
+        }
+      } else {
+        deleteFilter.employee = { $in: empIds };
+      }
+    }
+
+    // Filter by leaveType
+    if (filters.leaveType && typeof filters.leaveType === 'string' && filters.leaveType.trim()) {
+      const rawType = filters.leaveType.trim().toUpperCase();
+      deleteFilter.leaveType = rawType.replace(/\s+LEAVE$/, '');
+    }
+
+    // Filter by date range (startDate, endDate)
+    if (filters.startDate || filters.endDate) {
+      deleteFilter.startDate = {};
+      if (filters.startDate) deleteFilter.startDate.$gte = new Date(filters.startDate);
+      if (filters.endDate) {
+        const end = new Date(filters.endDate);
+        end.setHours(23, 59, 59, 999);
+        deleteFilter.startDate.$lte = end;
+      }
+    }
+
+    // Execute permanent deletion scoped strictly to target status and filters
+    const result = await Leave.deleteMany(deleteFilter);
+
+    return {
+      deletedCount: result.deletedCount,
+      status: normalizedStatus,
+      filtersApplied: {
+        employeeId: filters.employeeId || null,
+        department: filters.department || null,
+        leaveType: filters.leaveType || null,
+        startDate: filters.startDate || null,
+        endDate: filters.endDate || null
+      }
+    };
+  }
+
+  /**
+   * Delete single leave request by ID (only APPROVED or REJECTED)
+   */
+  async deleteLeaveById(id) {
+    return await this.bulkDeleteLeaves([id]);
+  }
+  /**
    * HR Attendance Reports
    */
   async getAttendanceReports({ startDate, endDate, department }) {
