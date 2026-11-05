@@ -1615,35 +1615,78 @@ return {
    * Get Departments & Headcounts (GET /api/hr/departments)
    */
   async getDepartments() {
-    const employees = await Employee.find({ status: { $ne: 'TERMINATED' } }).lean();
+    // 1. Fetch current roster employees (excluding soft-deleted, terminated, and resigned employees)
+    const employees = await Employee.find({
+      isDeleted: { $ne: true },
+      status: { $nin: ['TERMINATED', 'RESIGNED'] }
+    }).lean();
 
-    const techStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tech') || (e.department || '').toLowerCase().includes('engineering'));
-    const teleStaff = employees.filter(e => (e.department || '').toLowerCase().includes('tele') || (e.department || '').toLowerCase().includes('client'));
+    // Normalizes an employee department string to canonical department key ('tech', 'telecalling', etc.)
+    const normalizeToDeptKey = (deptName) => {
+      if (!deptName || typeof deptName !== 'string') return '';
+      const d = deptName.trim().toLowerCase();
+      if (d === 'tech' || d.includes('tech') || d.includes('engineering') || d === 'it' || d.includes('software') || d.includes('develop')) {
+        return 'tech';
+      }
+      if (d === 'telecalling' || d.includes('tele') || d.includes('calling') || d.includes('client')) {
+        return 'telecalling';
+      }
+      return d.replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+    };
 
-    const schedules = await DepartmentSchedule.find().lean();
-    const scheduleFor = (departmentNames) => schedules.find(s => departmentNames.some(n => n.toLowerCase() === s.department.toLowerCase())) || null;
+    // Partition employees strictly by normalized department to prevent duplicate counting
+    const techStaff = employees.filter(e => normalizeToDeptKey(e.department) === 'tech');
+    const teleStaff = employees.filter(e => normalizeToDeptKey(e.department) === 'telecalling');
+
+    const techActive = techStaff.filter(s => s.status === 'ACTIVE');
+    const techInactive = techStaff.filter(s => s.status === 'INACTIVE');
+
+    const teleActive = teleStaff.filter(s => s.status === 'ACTIVE');
+    const teleInactive = teleStaff.filter(s => s.status === 'INACTIVE');
+
+    const schedules = await DepartmentSchedule.find().sort({ effectiveDate: -1, createdAt: -1 }).lean();
+    const scheduleFor = (canonicalKey, deptNames = []) => {
+      const keys = [canonicalKey, ...deptNames].map(k => String(k || '').trim().toLowerCase());
+      return schedules.find(s => keys.includes(String(s.department || '').trim().toLowerCase())) || null;
+    };
+
+    const techSchedule = scheduleFor('TECH', [...new Set(techStaff.map(e => e.department))]);
+    const teleSchedule = scheduleFor('TELECALLING', [...new Set(teleStaff.map(e => e.department))]);
+
+    // Unassigned department leadership: return null unless officially assigned in database
+    const techLead = techSchedule?.leadName || techSchedule?.departmentLead || null;
+    const teleLead = teleSchedule?.leadName || teleSchedule?.departmentLead || null;
+
     return [
       {
         deptKey: 'tech',
         title: 'Tech & Engineering',
         subtitle: 'Frontend, Backend, Infrastructure & QA',
+        totalMembers: techStaff.length,
         staffCount: techStaff.length,
-        activeCount: techStaff.filter(s => s.status === 'ACTIVE').length,
-        leadName: 'Anita Rao (Lead HR / Tech Ops)',
+        activeStaff: techActive.length,
+        activeCount: techActive.length,
+        inactiveStaff: techInactive.length,
+        leadName: techLead,
+        leader: techLead,
         icon: 'computer',
         color: '#2563EB',
-        schedule: scheduleFor([...new Set(techStaff.map(e => e.department))])
+        schedule: techSchedule
       },
       {
         deptKey: 'telecalling',
         title: 'Telecalling & Client Relations',
         subtitle: 'Candidate Outreach, Lead Calling & Customer Support',
+        totalMembers: teleStaff.length,
         staffCount: teleStaff.length,
-        activeCount: teleStaff.filter(s => s.status === 'ACTIVE').length,
-        leadName: 'Neha Sharma (Operations Senior)',
+        activeStaff: teleActive.length,
+        activeCount: teleActive.length,
+        inactiveStaff: teleInactive.length,
+        leadName: teleLead,
+        leader: teleLead,
         icon: 'headset_mic',
         color: '#DB2777',
-        schedule: scheduleFor([...new Set(teleStaff.map(e => e.department))])
+        schedule: teleSchedule
       }
     ];
   }
