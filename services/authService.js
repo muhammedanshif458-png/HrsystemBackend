@@ -33,40 +33,15 @@ class AuthService {
     const location = loginContext.location;
     const workMode = loginContext.workMode || null;
 
-    // Apply location policy specifically to STAFF accounts
-    if (user.role === 'STAFF') {
-      if (workMode === 'WORK_FROM_HOME') {
-        const isMissingOrIncomplete = !location ||
-          typeof location !== 'object' ||
-          location.latitude == null || location.latitude === '' ||
-          location.longitude == null || location.longitude === '' ||
-          location.accuracy == null || location.accuracy === '' ||
-          location.capturedAt == null || location.capturedAt === '';
+    // Validate workMode if provided
+    if (workMode && !['OFFICE', 'WORK_FROM_HOME'].includes(workMode)) {
+      throw new AppError('Work mode must be OFFICE or WORK_FROM_HOME', 400);
+    }
 
-        if (isMissingOrIncomplete) {
-          throw new AppError('GPS location is required for WORK_FROM_HOME login. Location is missing or incomplete.', 400);
-        }
-
-        const latNum = Number(location.latitude);
-        const lngNum = Number(location.longitude);
-        const accNum = Number(location.accuracy);
-        const capDate = new Date(location.capturedAt);
-
-        if (
-          Number.isNaN(latNum) || latNum < -90 || latNum > 90 ||
-          Number.isNaN(lngNum) || lngNum < -180 || lngNum > 180 ||
-          Number.isNaN(accNum) || accNum < 0 ||
-          Number.isNaN(capDate.getTime())
-        ) {
-          throw new AppError('Invalid GPS location parameters.', 400);
-        }
-      } else if (workMode === 'OFFICE') {
-        // OFFICE login: Allowed without GPS location.
-        // Location may be null or omitted. If supplied, validated normally.
-      } else if (env.staffLoginRequireLocation && !location) {
-        // When workMode is not specified (legacy), honor STAFF_LOGIN_REQUIRE_LOCATION config
-        throw new AppError('Location is required to login. Enable location permission and try again.', 400);
-      }
+    // Location is optional for both OFFICE and WORK_FROM_HOME modes.
+    // STAFF_LOGIN_REQUIRE_LOCATION must never block OFFICE or WORK_FROM_HOME logins.
+    if (user.role === 'STAFF' && !workMode && env.staffLoginRequireLocation && !location) {
+      throw new AppError('Location is required to login. Enable location permission and try again.', 400);
     }
 
     // Update last login

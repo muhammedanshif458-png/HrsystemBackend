@@ -19,7 +19,7 @@ const env = {
   
   clientUrl: process.env.CLIENT_URL || 'http://localhost:51834,http://localhost:3000',
 
-  // Legacy clients may omit location. Set true to require GPS on every login.
+  // Location is optional for staff login (both OFFICE and WORK_FROM_HOME). Kept for legacy client compatibility.
   staffLoginRequireLocation: process.env.STAFF_LOGIN_REQUIRE_LOCATION === 'true',
   
   seedAdmin: {

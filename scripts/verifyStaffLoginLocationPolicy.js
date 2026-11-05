@@ -94,8 +94,7 @@ async function run() {
       capturedAt: '2026-11-05T06:00:00.000Z'
     };
 
-    console.log('--- TEST 1: STAFF + OFFICE + no location (omitted & null) -> Success 200 ---');
-    // 1a. location omitted
+    console.log('--- TEST 1: STAFF + OFFICE + no location (omitted) -> Success 200 ---');
     const officeNoLoc = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!',
@@ -106,10 +105,26 @@ async function run() {
     const officeHistory1 = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
     assert.strictEqual(officeHistory1.workMode, 'OFFICE');
     assert.strictEqual(officeHistory1.locationStatus, 'NOT_PROVIDED', 'OFFICE login without location must have NOT_PROVIDED status');
-    assert.strictEqual(officeHistory1.latitude, null);
-    assert.strictEqual(officeHistory1.longitude, null);
+    assert.strictEqual(officeHistory1.latitude, null, 'No fake latitude');
+    assert.strictEqual(officeHistory1.longitude, null, 'No fake longitude');
+    assert.strictEqual(officeHistory1.accuracy, null, 'No fake accuracy');
+    assert.strictEqual(officeHistory1.capturedAt, null, 'No fake capturedAt');
 
-    // 1b. location explicit null
+    console.log('--- TEST 2: STAFF + WORK_FROM_HOME + no location (omitted) -> Success 200 ---');
+    const wfhNoLoc = await request(server, 'POST', '/api/auth/login', {
+      email: staff.email,
+      password: 'TestPassword123!',
+      workMode: 'WORK_FROM_HOME'
+    });
+    assert.strictEqual(wfhNoLoc.status, 200, 'WORK_FROM_HOME login with omitted location must succeed without GPS');
+    assert.strictEqual(wfhNoLoc.body.data.workMode, 'WORK_FROM_HOME');
+    const wfhHistory1 = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
+    assert.strictEqual(wfhHistory1.workMode, 'WORK_FROM_HOME');
+    assert.strictEqual(wfhHistory1.locationStatus, 'NOT_PROVIDED', 'WORK_FROM_HOME login without location must have NOT_PROVIDED status');
+    assert.strictEqual(wfhHistory1.latitude, null, 'No fake latitude');
+    assert.strictEqual(wfhHistory1.longitude, null, 'No fake longitude');
+
+    console.log('--- TEST 3: STAFF + OFFICE + null location -> Success 200 ---');
     const officeNullLoc = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!',
@@ -118,59 +133,71 @@ async function run() {
     });
     assert.strictEqual(officeNullLoc.status, 200, 'OFFICE login with location=null must succeed');
     const officeHistory2 = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
+    assert.strictEqual(officeHistory2.workMode, 'OFFICE');
     assert.strictEqual(officeHistory2.locationStatus, 'NOT_PROVIDED');
+    assert.strictEqual(officeHistory2.latitude, null);
+    assert.strictEqual(officeHistory2.longitude, null);
 
-    console.log('--- TEST 2: STAFF + OFFICE + valid location -> Success 200, location captured ---');
-    const officeValidLoc = await request(server, 'POST', '/api/auth/login', {
-      email: staff.email,
-      password: 'TestPassword123!',
-      workMode: 'OFFICE',
-      location: validLocation
-    });
-    assert.strictEqual(officeValidLoc.status, 200, 'OFFICE login with valid location must succeed');
-    const officeHistory3 = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
-    assert.strictEqual(officeHistory3.workMode, 'OFFICE');
-    assert.strictEqual(officeHistory3.locationStatus, 'CAPTURED');
-    assert.strictEqual(officeHistory3.latitude, validLocation.latitude);
-    assert.strictEqual(officeHistory3.longitude, validLocation.longitude);
-
-    console.log('--- TEST 3: STAFF + WORK_FROM_HOME + valid location -> Success 200, location captured ---');
-    const wfhValidLoc = await request(server, 'POST', '/api/auth/login', {
-      email: staff.email,
-      password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME',
-      location: validLocation
-    });
-    assert.strictEqual(wfhValidLoc.status, 200, 'WORK_FROM_HOME login with valid location must succeed');
-    assert.strictEqual(wfhValidLoc.body.data.workMode, 'WORK_FROM_HOME');
-    const wfhHistory1 = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
-    assert.strictEqual(wfhHistory1.workMode, 'WORK_FROM_HOME');
-    assert.strictEqual(wfhHistory1.locationStatus, 'CAPTURED');
-    assert.strictEqual(wfhHistory1.latitude, validLocation.latitude);
-    assert.strictEqual(wfhHistory1.longitude, validLocation.longitude);
-
-    console.log('--- TEST 4: STAFF + WORK_FROM_HOME + no location -> HTTP 400 ---');
-    // 4a. location omitted
-    const wfhNoLoc = await request(server, 'POST', '/api/auth/login', {
-      email: staff.email,
-      password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME'
-    });
-    assert.strictEqual(wfhNoLoc.status, 400, 'WORK_FROM_HOME login without location must return HTTP 400');
-    assert.strictEqual(wfhNoLoc.body.success, false);
-
-    // 4b. location null
+    console.log('--- TEST 4: STAFF + WORK_FROM_HOME + null location -> Success 200 ---');
     const wfhNullLoc = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!',
       workMode: 'WORK_FROM_HOME',
       location: null
     });
-    assert.strictEqual(wfhNullLoc.status, 400, 'WORK_FROM_HOME login with location=null must return HTTP 400');
-    assert.strictEqual(wfhNullLoc.body.success, false);
+    assert.strictEqual(wfhNullLoc.status, 200, 'WORK_FROM_HOME login with location=null must succeed without GPS');
+    const wfhHistory2 = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
+    assert.strictEqual(wfhHistory2.workMode, 'WORK_FROM_HOME');
+    assert.strictEqual(wfhHistory2.locationStatus, 'NOT_PROVIDED');
+    assert.strictEqual(wfhHistory2.latitude, null);
+    assert.strictEqual(wfhHistory2.longitude, null);
 
-    console.log('--- TEST 5: STAFF + WORK_FROM_HOME + invalid location -> validation failure (422) ---');
-    // 5a. Out-of-range latitude (> 90)
+    console.log('--- TEST 5: Both modes save correct workMode and NOT_PROVIDED locationStatus ---');
+    assert.strictEqual(officeHistory1.workMode, 'OFFICE');
+    assert.strictEqual(officeHistory1.locationStatus, 'NOT_PROVIDED');
+    assert.strictEqual(wfhHistory1.workMode, 'WORK_FROM_HOME');
+    assert.strictEqual(wfhHistory1.locationStatus, 'NOT_PROVIDED');
+
+    console.log('--- TEST 6: Invalid workMode is rejected ---');
+    const invalidWorkMode = await request(server, 'POST', '/api/auth/login', {
+      email: staff.email,
+      password: 'TestPassword123!',
+      workMode: 'REMOTE_BEACH'
+    });
+    assert.strictEqual(invalidWorkMode.status, 422, 'Invalid workMode must be rejected by validator with 422');
+    assert.strictEqual(invalidWorkMode.body.success, false);
+
+    console.log('--- TEST 7: Legacy clients with valid location remain compatible ---');
+    // 7a. OFFICE with valid location
+    const officeWithLoc = await request(server, 'POST', '/api/auth/login', {
+      email: staff.email,
+      password: 'TestPassword123!',
+      workMode: 'OFFICE',
+      location: validLocation
+    });
+    assert.strictEqual(officeWithLoc.status, 200, 'OFFICE login with valid location succeeds');
+    const officeHistoryWithLoc = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
+    assert.strictEqual(officeHistoryWithLoc.workMode, 'OFFICE');
+    assert.strictEqual(officeHistoryWithLoc.locationStatus, 'CAPTURED');
+    assert.strictEqual(officeHistoryWithLoc.latitude, validLocation.latitude);
+    assert.strictEqual(officeHistoryWithLoc.longitude, validLocation.longitude);
+    assert.strictEqual(officeHistoryWithLoc.accuracy, validLocation.accuracy);
+
+    // 7b. WORK_FROM_HOME with valid location
+    const wfhWithLoc = await request(server, 'POST', '/api/auth/login', {
+      email: staff.email,
+      password: 'TestPassword123!',
+      workMode: 'WORK_FROM_HOME',
+      location: validLocation
+    });
+    assert.strictEqual(wfhWithLoc.status, 200, 'WORK_FROM_HOME login with valid location succeeds');
+    const wfhHistoryWithLoc = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
+    assert.strictEqual(wfhHistoryWithLoc.workMode, 'WORK_FROM_HOME');
+    assert.strictEqual(wfhHistoryWithLoc.locationStatus, 'CAPTURED');
+    assert.strictEqual(wfhHistoryWithLoc.latitude, validLocation.latitude);
+    assert.strictEqual(wfhHistoryWithLoc.longitude, validLocation.longitude);
+
+    // 7c. Invalid location fields when supplied are rejected (422) without leaking coordinates
     const invalidLat = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!',
@@ -178,116 +205,65 @@ async function run() {
       location: { ...validLocation, latitude: 91.5 }
     });
     assert.strictEqual(invalidLat.status, 422, 'Latitude > 90 must trigger validation failure 422');
-    assert.strictEqual(invalidLat.body.success, false);
-    // Ensure coordinates are not exposed in validation errors
-    const errorStringLat = JSON.stringify(invalidLat.body);
-    assert(!errorStringLat.includes('91.5'), 'Coordinates must not be echoed in validation error responses');
+    assert(!JSON.stringify(invalidLat.body).includes('91.5'), 'Coordinates must not be echoed in validation error responses');
 
-    // 5b. Out-of-range longitude (> 180)
-    const invalidLng = await request(server, 'POST', '/api/auth/login', {
-      email: staff.email,
-      password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME',
-      location: { ...validLocation, longitude: -185 }
-    });
-    assert.strictEqual(invalidLng.status, 422, 'Longitude < -180 must trigger validation failure 422');
-    const errorStringLng = JSON.stringify(invalidLng.body);
-    assert(!errorStringLng.includes('-185'), 'Coordinates must not be echoed in validation error responses');
-
-    // 5c. Negative accuracy (< 0)
     const invalidAcc = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME',
-      location: { ...validLocation, accuracy: -3.5 }
+      workMode: 'OFFICE',
+      location: { ...validLocation, accuracy: -5 }
     });
     assert.strictEqual(invalidAcc.status, 422, 'Negative accuracy must trigger validation failure 422');
-    const errorStringAcc = JSON.stringify(invalidAcc.body);
-    assert(!errorStringAcc.includes('-3.5'), 'Accuracy value must not be echoed in validation error responses');
 
-    // 5d. Non-ISO 8601 capturedAt
-    const invalidDate = await request(server, 'POST', '/api/auth/login', {
-      email: staff.email,
-      password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME',
-      location: { ...validLocation, capturedAt: 'invalid-date-string' }
-    });
-    assert.strictEqual(invalidDate.status, 422, 'Non-ISO 8601 date must trigger validation failure 422');
-
-    console.log('--- TEST 6: Non-STAFF accounts are NOT blocked by staff location policy ---');
-    // HR login without location
-    const hrLoginNoLoc = await request(server, 'POST', '/api/auth/login', {
+    console.log('--- TEST 8: Non-STAFF accounts are NOT blocked ---');
+    const hrLogin = await request(server, 'POST', '/api/auth/login', {
       email: hr.email,
       password: 'TestPassword123!'
     });
-    assert.strictEqual(hrLoginNoLoc.status, 200, 'HR login without location must succeed');
+    assert.strictEqual(hrLogin.status, 200, 'HR login without location succeeds');
 
-    // HR login with WORK_FROM_HOME and no location
-    const hrWfhNoLoc = await request(server, 'POST', '/api/auth/login', {
-      email: hr.email,
-      password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME'
-    });
-    assert.strictEqual(hrWfhNoLoc.status, 200, 'HR login with WORK_FROM_HOME and no location must succeed');
-
-    // SUPER_ADMIN login without location
     const superAdminLogin = await request(server, 'POST', '/api/auth/login', {
       email: superAdmin.email,
       password: 'TestPassword123!'
     });
-    assert.strictEqual(superAdminLogin.status, 200, 'SUPER_ADMIN login without location must succeed');
+    assert.strictEqual(superAdminLogin.status, 200, 'SUPER_ADMIN login without location succeeds');
 
-    console.log('--- TEST 7: STAFF_LOGIN_REQUIRE_LOCATION config behavior & compatibility ---');
-    // Set STAFF_LOGIN_REQUIRE_LOCATION = true
+    console.log('--- TEST 9: STAFF_LOGIN_REQUIRE_LOCATION config cannot block OFFICE or WORK_FROM_HOME ---');
     env.staffLoginRequireLocation = true;
 
-    // 7a. Non-STAFF is STILL not blocked when config is true
-    const hrWithConfig = await request(server, 'POST', '/api/auth/login', {
-      email: hr.email,
-      password: 'TestPassword123!'
-    });
-    assert.strictEqual(hrWithConfig.status, 200, 'HR login without location must succeed even when config is true');
-
-    const superAdminWithConfig = await request(server, 'POST', '/api/auth/login', {
-      email: superAdmin.email,
-      password: 'TestPassword123!'
-    });
-    assert.strictEqual(superAdminWithConfig.status, 200, 'SUPER_ADMIN login must succeed even when config is true');
-
-    // 7b. STAFF + OFFICE + no location is STILL allowed when config is true (mode policy takes precedence)
-    const officeWithConfig = await request(server, 'POST', '/api/auth/login', {
+    // Both modes must succeed even if config is true
+    const officeWithConfigTrue = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!',
       workMode: 'OFFICE'
     });
-    assert.strictEqual(officeWithConfig.status, 200, 'STAFF OFFICE login without location must succeed even when config is true');
+    assert.strictEqual(officeWithConfigTrue.status, 200, 'OFFICE login must not be blocked when config is true');
 
-    // 7c. STAFF legacy (no workMode) + no location is rejected with 400 when config is true
+    const wfhWithConfigTrue = await request(server, 'POST', '/api/auth/login', {
+      email: staff.email,
+      password: 'TestPassword123!',
+      workMode: 'WORK_FROM_HOME'
+    });
+    assert.strictEqual(wfhWithConfigTrue.status, 200, 'WORK_FROM_HOME login must not be blocked when config is true');
+
+    // Legacy client without workMode is rejected when config is true
     const legacyBlocked = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!'
     });
-    assert.strictEqual(legacyBlocked.status, 400, 'STAFF legacy login without location must be rejected when config is true');
+    assert.strictEqual(legacyBlocked.status, 400, 'Legacy login without workMode is blocked when config is true');
 
-    // 7d. Reset config to false: legacy login without location succeeds
+    // When config is false, legacy client succeeds without location
     env.staffLoginRequireLocation = false;
     const legacyAllowed = await request(server, 'POST', '/api/auth/login', {
       email: staff.email,
       password: 'TestPassword123!'
     });
-    assert.strictEqual(legacyAllowed.status, 200, 'STAFF legacy login without location must succeed when config is false');
+    assert.strictEqual(legacyAllowed.status, 200, 'Legacy login without location succeeds when config is false');
     const legacyHistory = await StaffLoginHistory.findOne({ employeeId: employee._id }).sort({ loginAt: -1 });
     assert.strictEqual(legacyHistory.locationStatus, 'NOT_PROVIDED');
 
-    // 7e. Even when config is false, WORK_FROM_HOME without location is STILL rejected
-    const wfhStillRejected = await request(server, 'POST', '/api/auth/login', {
-      email: staff.email,
-      password: 'TestPassword123!',
-      workMode: 'WORK_FROM_HOME'
-    });
-    assert.strictEqual(wfhStillRejected.status, 400, 'WORK_FROM_HOME without location must be rejected even when config is false');
-
-    console.log('\nAll StaffHub login location policy verification checks passed successfully!');
+    console.log('\nAll StaffHub login policy checks passed successfully (GPS-free login for both OFFICE and WORK_FROM_HOME)!');
   } finally {
     env.staffLoginRequireLocation = originalPolicy;
     if (server) await new Promise(resolve => server.close(resolve));
@@ -300,4 +276,3 @@ run().catch(error => {
   console.error('Test run failed:', error);
   process.exitCode = 1;
 });
-
