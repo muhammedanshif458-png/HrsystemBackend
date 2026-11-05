@@ -9,12 +9,18 @@ const validate = (req, res, next) => {
       field: err.path || err.param,
       message: err.msg,
       // Do not echo precise location values in validation responses.
-      ...(String(err.path || '').startsWith('location.') ? {} : { value: err.value })
+      ...(String(err.path || '').startsWith('location') ? {} : { value: err.value })
     }));
     return sendValidationError(res, formattedErrors, 'Validation failed');
   }
   next();
 };
+
+const isLocationObject = (value, { req }) =>
+  req.body &&
+  req.body.location != null &&
+  typeof req.body.location === 'object' &&
+  !Array.isArray(req.body.location);
 
 const loginValidator = [
   body('email')
@@ -24,16 +30,16 @@ const loginValidator = [
     .normalizeEmail(),
   body('password')
     .notEmpty().withMessage('Password is required'),
-  body('workMode').optional().isIn(['OFFICE', 'WORK_FROM_HOME'])
+  body('workMode').optional({ nullable: true }).isIn(['OFFICE', 'WORK_FROM_HOME'])
     .withMessage('Work mode must be OFFICE or WORK_FROM_HOME'),
-  body('location').optional().isObject().withMessage('Location must be an object'),
-  body('location.latitude').if(body('location').exists()).exists().withMessage('Latitude is required when location is supplied')
+  body('location').optional({ nullable: true }).isObject().withMessage('Location must be an object'),
+  body('location.latitude').if(isLocationObject).exists({ checkFalsy: false }).withMessage('Latitude is required when location is supplied')
     .bail().isFloat({ min: -90, max: 90 }).withMessage('Latitude must be between -90 and 90'),
-  body('location.longitude').if(body('location').exists()).exists().withMessage('Longitude is required when location is supplied')
+  body('location.longitude').if(isLocationObject).exists({ checkFalsy: false }).withMessage('Longitude is required when location is supplied')
     .bail().isFloat({ min: -180, max: 180 }).withMessage('Longitude must be between -180 and 180'),
-  body('location.accuracy').if(body('location').exists()).exists().withMessage('Accuracy is required when location is supplied')
+  body('location.accuracy').if(isLocationObject).exists({ checkFalsy: false }).withMessage('Accuracy is required when location is supplied')
     .bail().isFloat({ min: 0 }).withMessage('Accuracy must be a non-negative number'),
-  body('location.capturedAt').if(body('location').exists()).exists().withMessage('Capture timestamp is required when location is supplied')
+  body('location.capturedAt').if(isLocationObject).exists({ checkFalsy: false }).withMessage('Capture timestamp is required when location is supplied')
     .bail().isISO8601().withMessage('Capture timestamp must be a valid ISO 8601 date'),
   validate
 ];

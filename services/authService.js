@@ -31,8 +31,42 @@ class AuthService {
     }
 
     const location = loginContext.location;
-    if (env.staffLoginRequireLocation && !location) {
-      throw new AppError('Location is required to login. Enable location permission and try again.', 400);
+    const workMode = loginContext.workMode || null;
+
+    // Apply location policy specifically to STAFF accounts
+    if (user.role === 'STAFF') {
+      if (workMode === 'WORK_FROM_HOME') {
+        const isMissingOrIncomplete = !location ||
+          typeof location !== 'object' ||
+          location.latitude == null || location.latitude === '' ||
+          location.longitude == null || location.longitude === '' ||
+          location.accuracy == null || location.accuracy === '' ||
+          location.capturedAt == null || location.capturedAt === '';
+
+        if (isMissingOrIncomplete) {
+          throw new AppError('GPS location is required for WORK_FROM_HOME login. Location is missing or incomplete.', 400);
+        }
+
+        const latNum = Number(location.latitude);
+        const lngNum = Number(location.longitude);
+        const accNum = Number(location.accuracy);
+        const capDate = new Date(location.capturedAt);
+
+        if (
+          Number.isNaN(latNum) || latNum < -90 || latNum > 90 ||
+          Number.isNaN(lngNum) || lngNum < -180 || lngNum > 180 ||
+          Number.isNaN(accNum) || accNum < 0 ||
+          Number.isNaN(capDate.getTime())
+        ) {
+          throw new AppError('Invalid GPS location parameters.', 400);
+        }
+      } else if (workMode === 'OFFICE') {
+        // OFFICE login: Allowed without GPS location.
+        // Location may be null or omitted. If supplied, validated normally.
+      } else if (env.staffLoginRequireLocation && !location) {
+        // When workMode is not specified (legacy), honor STAFF_LOGIN_REQUIRE_LOCATION config
+        throw new AppError('Location is required to login. Enable location permission and try again.', 400);
+      }
     }
 
     // Update last login
@@ -48,16 +82,25 @@ class AuthService {
       employeeData = (await Employee.findOne({ user: user._id })) || (await Employee.findOne({ email: user.email }));
     }
 
+    const hasValidLocation = Boolean(
+      location &&
+      typeof location === 'object' &&
+      location.latitude != null &&
+      location.longitude != null &&
+      !isNaN(Number(location.latitude)) &&
+      !isNaN(Number(location.longitude))
+    );
+
     const loginAt = new Date();
     const loginHistory = await StaffLoginHistory.create({
       employeeId: employeeData?._id || null,
       userId: user._id,
-      workMode: loginContext.workMode || null,
-      locationStatus: location ? 'CAPTURED' : 'NOT_PROVIDED',
-      latitude: location ? Number(location.latitude) : null,
-      longitude: location ? Number(location.longitude) : null,
-      accuracy: location ? Number(location.accuracy) : null,
-      capturedAt: location ? new Date(location.capturedAt) : null,
+      workMode,
+      locationStatus: hasValidLocation ? 'CAPTURED' : 'NOT_PROVIDED',
+      latitude: hasValidLocation ? Number(location.latitude) : null,
+      longitude: hasValidLocation ? Number(location.longitude) : null,
+      accuracy: hasValidLocation && location.accuracy != null && !isNaN(Number(location.accuracy)) ? Number(location.accuracy) : null,
+      capturedAt: hasValidLocation && location.capturedAt ? new Date(location.capturedAt) : null,
       loginAt,
       metadata: loginContext.metadata || {}
     });
