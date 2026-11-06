@@ -484,15 +484,36 @@ class StaffService {
     };
   }
 
-  _formatAttendanceRecord(rec, employee) {
+  async _formatAttendanceRecord(rec, employee) {
     const isLateRec = Boolean(rec.isLate || rec.status === 'LATE');
-    const snapshot = rec.scheduleSnapshot || null;
-    const workingHoursNum = Number(rec.workingHours) || 0;
-    const workedHoursInt = Math.floor(workingHoursNum);
-    const workedMinsInt = Math.round((workingHoursNum - workedHoursInt) * 60);
-    const workedDuration = workingHoursNum > 0
-      ? (workedMinsInt > 0 ? `${workedHoursInt}h ${workedMinsInt}m` : `${workedHoursInt}h`)
-      : '0h';
+    let snapshot = rec.scheduleSnapshot || null;
+    const hasSnapshot = Boolean(snapshot && (snapshot.scheduledCheckIn || snapshot.checkInTime));
+
+    if (!hasSnapshot && employee?.department) {
+      try {
+        const effSched = await DepartmentSchedule.getEffectiveSchedule(employee.department, rec.date || rec.checkIn || new Date());
+        if (effSched) {
+          snapshot = {
+            scheduleId: effSched._id,
+            department: effSched.department,
+            scheduledCheckIn: effSched.checkInTime,
+            scheduledCheckOut: effSched.checkOutTime || '18:00',
+            gracePeriodMinutes: typeof effSched.gracePeriodMinutes === 'number' ? effSched.gracePeriodMinutes : 0,
+            timezone: effSched.timezone || effSched.timeZone || 'Asia/Kolkata'
+          };
+        }
+      } catch (err) {
+        // Fallback gracefully if department schedule lookup fails
+      }
+    }
+
+    const scheduledCheckIn = rec.scheduledCheckIn || snapshot?.scheduledCheckIn || snapshot?.checkInTime || null;
+    const scheduledCheckOut = rec.scheduledCheckOut || snapshot?.scheduledCheckOut || snapshot?.checkOutTime || (snapshot ? '18:00' : null);
+    const scheduleTimeZone = rec.scheduleTimeZone || snapshot?.timezone || 'Asia/Kolkata';
+    const gracePeriodMinutes = typeof rec.gracePeriodMinutes === 'number'
+      ? rec.gracePeriodMinutes
+      : (typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0);
+    const scheduleConfigured = Boolean(rec.scheduleConfigured || rec.scheduleStatus === 'CONFIGURED' || snapshot || scheduledCheckIn);
 
     const totalBreakMins = Number(rec.totalBreakMinutes) || (Array.isArray(rec.breaks) ? rec.breaks.reduce((s, b) => s + (b.durationMinutes || 0), 0) : 0);
 
@@ -511,7 +532,9 @@ class StaffService {
       const startMs = b.startTime ? new Date(b.startTime).getTime() : 0;
       const endMs = b.endTime ? new Date(b.endTime).getTime() : 0;
       const nowMs = Date.now();
-      const durationSeconds = endMs && startMs
+      const isActive = !b.endTime;
+      const isCompleted = Boolean(b.endTime);
+      const durationSeconds = isCompleted && startMs
         ? Math.max(0, Math.round((endMs - startMs) / 1000))
         : (startMs ? Math.max(0, Math.round((nowMs - startMs) / 1000)) : 0);
       const durationMins = typeof b.durationMinutes === 'number' && b.durationMinutes > 0
@@ -528,11 +551,30 @@ class StaffService {
         endTime: b.endTime ? new Date(b.endTime).toISOString() : null,
         durationMinutes: durationMins,
         durationSeconds,
-        isActive: !b.endTime,
-        isCompleted: Boolean(b.endTime),
+        isActive,
+        isCompleted,
+        status: isActive ? 'ACTIVE' : 'COMPLETED',
         remarks: b.remarks || ''
       };
     });
+
+    let workingHoursNum = Number(rec.workingHours) || 0;
+    if (!workingHoursNum && rec.checkIn && rec.checkOut) {
+      const diffMs = Math.max(0, new Date(rec.checkOut).getTime() - new Date(rec.checkIn).getTime() - totalBreakMins * 60 * 1000);
+      workingHoursNum = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+    }
+
+    let workedDuration = '0h';
+    if (workingHoursNum > 0) {
+      const workedHoursInt = Math.floor(workingHoursNum);
+      const workedMinsInt = Math.round((workingHoursNum - workedHoursInt) * 60);
+      workedDuration = workedMinsInt > 0 ? `${workedHoursInt}h ${workedMinsInt}m` : `${workedHoursInt}h`;
+    } else if (rec.checkIn && !rec.checkOut) {
+      const elapsedMs = Math.max(0, Date.now() - new Date(rec.checkIn).getTime() - totalBreakMins * 60 * 1000);
+      const elHours = Math.floor(elapsedMs / (1000 * 60 * 60));
+      const elMins = Math.floor((elapsedMs % (1000 * 60 * 60)) / (1000 * 60));
+      workedDuration = elHours > 0 ? (elMins > 0 ? `${elHours}h ${elMins}m` : `${elHours}h`) : (elMins > 0 ? `${elMins}m` : '0h');
+    }
 
     let sessionStatus = 'PENDING';
     if (rec.checkIn && rec.checkOut) {
@@ -540,6 +582,9 @@ class StaffService {
     } else if (rec.checkIn) {
       sessionStatus = 'IN_PROGRESS';
     }
+
+    const checkoutStatus = rec.checkOut ? 'Completed' : (rec.checkIn ? 'Pending' : 'Not Checked In');
+    const activeBreakItem = enrichedBreaks.find(b => b.isActive) || null;
 
     return {
       ...rec,
@@ -554,27 +599,28 @@ class StaffService {
       checkInAt: rec.checkIn ? new Date(rec.checkIn).toISOString() : null,
       checkOutAt: rec.checkOut ? new Date(rec.checkOut).toISOString() : null,
       sessionStatus,
+      checkoutStatus,
       status: rec.status || 'PRESENT',
       workMode: rec.workMode || null,
-      workingHours: rec.workingHours || 0,
+      workingHours: workingHoursNum,
       workedDuration,
       breakDuration: formatBreakDurationStr(totalBreakMins),
       totalBreakMinutes: totalBreakMins,
       totalBreakSeconds: totalBreakMins * 60,
       numberOfBreaks: enrichedBreaks.length,
       breaks: enrichedBreaks,
-      activeBreak: rec.activeBreak || null,
-      breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (rec.activeBreak?.startTime ? new Date(rec.activeBreak.startTime).toISOString() : null),
+      activeBreak: rec.activeBreak || (activeBreakItem ? { breakType: activeBreakItem.breakType, startTime: activeBreakItem.startTime, breakId: activeBreakItem.id } : null),
+      breakStartedAt: rec.breakStartedAt ? new Date(rec.breakStartedAt).toISOString() : (activeBreakItem?.startTime || null),
       department: employee.department || snapshot?.department || null,
       isLate: isLateRec,
       late: isLateRec,
       minutesLate: rec.minutesLate || 0,
-      scheduleConfigured: Boolean(rec.scheduleConfigured || rec.scheduleStatus === 'CONFIGURED' || snapshot || rec.scheduledCheckIn),
-      scheduledCheckIn: rec.scheduledCheckIn || snapshot?.scheduledCheckIn || null,
-      scheduledCheckOut: rec.scheduledCheckOut || snapshot?.scheduledCheckOut || '18:00',
-      scheduleTimeZone: rec.scheduleTimeZone || snapshot?.timezone || 'Asia/Kolkata',
-      timezone: rec.scheduleTimeZone || snapshot?.timezone || 'Asia/Kolkata',
-      gracePeriodMinutes: typeof rec.gracePeriodMinutes === 'number' ? rec.gracePeriodMinutes : (typeof snapshot?.gracePeriodMinutes === 'number' ? snapshot.gracePeriodMinutes : 0),
+      scheduleConfigured,
+      scheduledCheckIn,
+      scheduledCheckOut,
+      scheduleTimeZone,
+      timezone: scheduleTimeZone,
+      gracePeriodMinutes,
       scheduleSnapshot: snapshot
     };
   }
@@ -619,7 +665,7 @@ class StaffService {
       Attendance.countDocuments(filter)
     ]);
 
-    const attendance = rawAttendance.map(rec => this._formatAttendanceRecord(rec, employee));
+    const attendance = await Promise.all(rawAttendance.map(rec => this._formatAttendanceRecord(rec, employee)));
 
     const totalPages = Math.ceil(total / limit) || 1;
 
@@ -891,7 +937,7 @@ class StaffService {
       throw new AppError('Attendance record not found', 404);
     }
 
-    return this._formatAttendanceRecord(rec, employee);
+    return await this._formatAttendanceRecord(rec, employee);
   }
 
   /**

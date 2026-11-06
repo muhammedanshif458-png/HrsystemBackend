@@ -113,7 +113,7 @@ departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmen
     { departmentDisplay: new RegExp(`^${rawDept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
   ];
 
-  return this.findOne({
+  const schedule = await this.findOne({
     $and: [
       { $or: deptQuery },
       {
@@ -125,6 +125,13 @@ departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmen
       }
     ]
   })
+    .sort({ effectiveDate: -1, createdAt: -1 })
+    .lean();
+
+  if (schedule) return schedule;
+
+  // Fallback to latest configured schedule for the department if targetDate precedes effectiveDate
+  return this.findOne({ $or: deptQuery })
     .sort({ effectiveDate: -1, createdAt: -1 })
     .lean();
 };
