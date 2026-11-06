@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { body, param } = require('express-validator');
 const { validate } = require('./authValidator');
+const { normalizeLeaveType } = require('../utils/leaveResponseHelper');
 
 const updateProfileValidator = [
   body('phone')
@@ -218,39 +219,6 @@ const breakEndValidator = [
   validate
 ];
 
-/**
- * Normalizes frontend leave types ('Casual Leave', 'Sick Leave', 'Earned Leave', 'Medical Leave', etc.)
- * to canonical uppercase enum values understood across backend models and services.
- */
-const normalizeLeaveType = (type) => {
-  if (!type || typeof type !== 'string') return type;
-  const upper = type.trim().toUpperCase();
-  switch (upper) {
-    case 'CASUAL':
-    case 'CASUAL LEAVE':
-      return 'CASUAL';
-    case 'SICK':
-    case 'SICK LEAVE':
-      return 'SICK';
-    case 'ANNUAL':
-    case 'ANNUAL LEAVE':
-    case 'EARNED':
-    case 'EARNED LEAVE':
-      return 'ANNUAL';
-    case 'MEDICAL':
-    case 'MEDICAL LEAVE':
-      return 'MEDICAL';
-    case 'UNPAID':
-    case 'UNPAID LEAVE':
-      return 'UNPAID';
-    case 'OTHER':
-    case 'OTHER LEAVE':
-      return 'OTHER';
-    default:
-      return upper;
-  }
-};
-
 const applyLeaveValidator = [
   (req, res, next) => {
     if (req.body) {
@@ -316,6 +284,16 @@ const applyLeaveValidator = [
     .optional({ nullable: true })
     .trim()
     .isLength({ max: 255 }).withMessage('Document name must be under 255 characters'),
+  body('leaveType').custom((val, { req }) => {
+    const norm = normalizeLeaveType(val);
+    if (norm === 'MEDICAL') {
+      const hasProof = Boolean(req.file || req.body?.documentId || req.body?.documentUrl);
+      if (!hasProof) {
+        throw new Error('Medical proof document is required for Medical Leave');
+      }
+    }
+    return true;
+  }),
   validate
 ];
 

@@ -16,7 +16,7 @@ const {
   isOfficeWorkMode
 } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
-const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
+const { normalizeLeaveType, enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
 const getDayBounds = (dateStr = null) => getDayBoundsForKey(dateStr || getDateKey(new Date(), 'Asia/Kolkata'));
 
@@ -1019,7 +1019,9 @@ return {
     }
 
     if (status) filter.status = status;
-    if (leaveType) filter.leaveType = leaveType;
+    if (leaveType && typeof leaveType === 'string' && leaveType.trim().toLowerCase() !== 'all') {
+      filter.leaveType = normalizeLeaveType(leaveType);
+    }
 
     if (startDate || endDate) {
       if (startDate && endDate) {
@@ -1292,10 +1294,9 @@ return {
       }
     }
 
-    // Filter by leaveType
+    // Filter by leaveType – normalize through shared helper so SICK/MEDICAL/CASUAL etc. all resolve consistently
     if (filters.leaveType && typeof filters.leaveType === 'string' && filters.leaveType.trim()) {
-      const rawType = filters.leaveType.trim().toUpperCase();
-      deleteFilter.leaveType = rawType.replace(/\s+LEAVE$/, '');
+      deleteFilter.leaveType = normalizeLeaveType(filters.leaveType);
     }
 
     // Filter by date range (startDate, endDate)

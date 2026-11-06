@@ -6,7 +6,7 @@ const DepartmentSchedule = require('../models/DepartmentSchedule');
 const Leave = require('../models/Leave');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { AppError } = require('../middleware/errorMiddleware');
-const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
+const { normalizeLeaveType, enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 const { getDateKey, getUtcDateForKey, classifyCheckIn, getScheduleForDepartment } = require('../utils/attendanceSchedule');
 
 /**
@@ -718,6 +718,14 @@ class StaffService {
       );
     }
 
+    const normalizedLeaveType = normalizeLeaveType(leaveType);
+
+    // Enforce medical proof requirement for Medical Leave
+    const hasProof = Boolean(file || documentId || documentUrl);
+    if (normalizedLeaveType === 'MEDICAL' && !hasProof) {
+      throw new AppError('Medical proof document is required for Medical Leave', 400);
+    }
+
     let attachedDocId = null;
     let finalDocUrl = null;
     let finalDocName = null;
@@ -728,8 +736,8 @@ class StaffService {
       const hrDoc = new HRDocument({
         employee: employee._id,
         employeeIdString: employee.employeeId || '',
-        title: documentTitle || `${leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Leave Attachment'} - ${employee.firstName || ''} ${employee.lastName || ''}`.trim(),
-        category: leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Other',
+        title: documentTitle || `${normalizedLeaveType === 'MEDICAL' ? 'Medical Certificate' : 'Leave Attachment'} - ${employee.firstName || ''} ${employee.lastName || ''}`.trim(),
+        category: normalizedLeaveType === 'MEDICAL' ? 'Medical Certificate' : 'Other',
         description: reason || 'Leave attachment document',
         fileName: file.filename,
         originalName: file.originalname,
@@ -786,8 +794,8 @@ class StaffService {
           hrDoc = new HRDocument({
             employee: employee._id,
             employeeIdString: employee.employeeId || '',
-            title: documentTitle || `${leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Leave Attachment'} - ${employee.firstName || ''} ${employee.lastName || ''}`.trim(),
-            category: leaveType === 'MEDICAL' ? 'Medical Certificate' : 'Other',
+            title: documentTitle || `${normalizedLeaveType === 'MEDICAL' ? 'Medical Certificate' : 'Leave Attachment'} - ${employee.firstName || ''} ${employee.lastName || ''}`.trim(),
+            category: normalizedLeaveType === 'MEDICAL' ? 'Medical Certificate' : 'Other',
             description: reason || 'Leave attachment document',
             fileName: cleanPath,
             originalName: finalDocName,
@@ -816,7 +824,7 @@ class StaffService {
 
     const leave = new Leave({
       employee: employee._id,
-      leaveType,
+      leaveType: normalizedLeaveType,
       startDate: start,
       endDate: end,
       reason,
@@ -834,7 +842,7 @@ class StaffService {
   /**
    * View own leave requests
    */
-  async getLeaves(user, { page = 1, limit = 20, status }) {
+  async getLeaves(user, { page = 1, limit = 20, status, leaveType } = {}) {
     const employee = await this.getEmployeeOrThrow(user);
 
     page = Math.max(1, parseInt(page, 10));
@@ -843,6 +851,9 @@ class StaffService {
 
     const filter = { employee: employee._id };
     if (status) filter.status = status;
+    if (leaveType && typeof leaveType === 'string' && leaveType.trim().toLowerCase() !== 'all') {
+      filter.leaveType = normalizeLeaveType(leaveType);
+    }
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)

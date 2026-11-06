@@ -12,6 +12,62 @@
  */
 
 /**
+ * Normalizes frontend leave types ('Casual Leave', 'Sick Leave', 'Earned Leave', 'Medical Leave', etc.)
+ * and legacy aliases (e.g. SICK_LEAVE, MEDICAL_LEAVE) to canonical uppercase enum values understood across models and services.
+ *
+ * @param {string} type
+ * @returns {string}
+ */
+function normalizeLeaveType(type) {
+  if (!type || typeof type !== 'string') return type;
+  const upper = type.trim().toUpperCase().replace(/_/g, ' ');
+  switch (upper) {
+    case 'CASUAL':
+    case 'CASUAL LEAVE':
+      return 'CASUAL';
+    case 'SICK':
+    case 'SICK LEAVE':
+      return 'SICK';
+    case 'MEDICAL':
+    case 'MEDICAL LEAVE':
+      return 'MEDICAL';
+    case 'ANNUAL':
+    case 'ANNUAL LEAVE':
+    case 'EARNED':
+    case 'EARNED LEAVE':
+      return 'ANNUAL';
+    case 'UNPAID':
+    case 'UNPAID LEAVE':
+      return 'UNPAID';
+    case 'OTHER':
+    case 'OTHER LEAVE':
+      return 'OTHER';
+    default:
+      return upper;
+  }
+}
+
+/**
+ * Returns a human-friendly display label for canonical leave types.
+ *
+ * @param {string} type
+ * @returns {string}
+ */
+function formatLeaveTypeDisplay(type) {
+  const norm = normalizeLeaveType(type);
+  switch (norm) {
+    case 'CASUAL': return 'Casual Leave';
+    case 'SICK': return 'Sick Leave';
+    case 'MEDICAL': return 'Medical Leave';
+    case 'ANNUAL':
+    case 'EARNED': return 'Earned Leave';
+    case 'UNPAID': return 'Unpaid Leave';
+    case 'OTHER': return 'Other';
+    default: return type || 'Other';
+  }
+}
+
+/**
  * Enrich a single leave object with medical proof fields and authenticated URLs.
  *
  * @param {Object} leave  - A plain leave object (from .lean()) or a Mongoose document
@@ -37,6 +93,13 @@ function enrichLeaveResponse(leave, rolePrefix = 'staff') {
   }
 
   const hasDoc = !!docId;
+
+  // ── Distinct Leave Type & Display ──────────────────────────────────────
+  const canonicalType = normalizeLeaveType(obj.leaveType);
+  obj.leaveType = canonicalType;
+  obj.leaveTypeDisplay = formatLeaveTypeDisplay(canonicalType);
+  obj.isMedical = canonicalType === 'MEDICAL';
+  obj.isSick = canonicalType === 'SICK';
 
   // ── Medical proof fields (expected by HR Dashboard & StaffHub) ──────────
   obj.hasMedicalProof = hasDoc;
@@ -94,4 +157,9 @@ function enrichLeaveResponses(leaves, rolePrefix = 'staff') {
   return leaves.map(l => enrichLeaveResponse(l, rolePrefix));
 }
 
-module.exports = { enrichLeaveResponse, enrichLeaveResponses };
+module.exports = {
+  normalizeLeaveType,
+  formatLeaveTypeDisplay,
+  enrichLeaveResponse,
+  enrichLeaveResponses
+};
