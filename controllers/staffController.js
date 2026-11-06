@@ -170,6 +170,32 @@ class StaffController {
       next(err);
     }
   }
+
+  /**
+   * GET /api/staff/attendance/:attendanceId
+   * Returns full detail for one attendance record (own only).
+   */
+  async getAttendanceById(req, res, next) {
+    try {
+      const record = await staffService.getAttendanceById(req.user, req.params.attendanceId);
+      return sendSuccess(res, 'Attendance record fetched successfully', record);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * DELETE /api/staff/attendance/history
+   * Clears the staff member's history VIEW (non-destructive cutoff).
+   */
+  async clearAttendanceHistory(req, res, next) {
+    try {
+      const result = await staffService.clearAttendanceHistory(req.user);
+      return sendSuccess(res, 'Attendance history cleared from your view. Existing records are preserved for HR.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new StaffController();

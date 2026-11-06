@@ -17,7 +17,8 @@ const {
   applyLeaveValidator,
   leaveIdParamValidator,
   dailyUpdateValidator,
-  dailyUpdateIdParamValidator
+  dailyUpdateIdParamValidator,
+  attendanceIdParamValidator
 } = require('../validators/staffValidator');
 
 // Protect all Staff routes with JWT authentication
@@ -57,6 +58,12 @@ router.post('/attendance/breaks/end', staffOnly, breakEndValidator, staffControl
 router.post('/attendance/:attendanceId/breaks/start', staffOnly, breakStartValidator, staffController.startBreak);
 router.post('/attendance/:attendanceId/breaks/end', staffOnly, breakEndValidator, staffController.endBreak);
 router.get('/attendance', staffOnly, staffController.getAttendance);
+// Clear attendance history from staff's own view (non-destructive cutoff)
+router.delete('/attendance/history', staffOnly, staffController.clearAttendanceHistory);
+router.post('/attendance/clear-history', staffOnly, staffController.clearAttendanceHistory);
+router.post('/attendance/history/clear', staffOnly, staffController.clearAttendanceHistory);
+// Detail view for a single attendance record (own only)
+router.get('/attendance/:attendanceId', staffOnly, attendanceIdParamValidator, staffController.getAttendanceById);
 
 // Leaves
 router.post('/leaves', staffOnly, leaveAttachmentUpload, applyLeaveValidator, staffController.applyLeave);

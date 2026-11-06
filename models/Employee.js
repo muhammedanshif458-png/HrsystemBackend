@@ -181,6 +181,16 @@ const employeeSchema = new mongoose.Schema(
     deletedAt: {
       type: Date,
       default: null
+    },
+    /**
+     * Per-employee attendance history visibility cutoff.
+     * Records with Attendance.date < this value are hidden from the
+     * staff's own StaffHub history view only.  HR/admin queries are
+     * unaffected.  Attendance documents are NEVER deleted.
+     */
+    attendanceHistoryCutoff: {
+      type: Date,
+      default: null
     }
   },
   {

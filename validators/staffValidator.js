@@ -377,6 +377,12 @@ const dailyUpdateIdParamValidator = [
   validate
 ];
 
+const attendanceIdParamValidator = [
+  param('attendanceId')
+    .isMongoId().withMessage('Invalid attendance ID format'),
+  validate
+];
+
 module.exports = {
   normalizeBreakType,
   getBreakCategory,
@@ -390,6 +396,7 @@ module.exports = {
   applyLeaveValidator,
   leaveIdParamValidator,
   dailyUpdateValidator,
-  dailyUpdateIdParamValidator
+  dailyUpdateIdParamValidator,
+  attendanceIdParamValidator
 };
 

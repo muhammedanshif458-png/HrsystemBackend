@@ -8,7 +8,7 @@
     "dev": "nodemon server.js",
     "seed": "node scripts/seedAdmin.js",
     "seed:superadmin": "node scripts/seedSuperAdmin.js",
-    "test": "npm run test:attendance && node scripts/verifySystem.js && node scripts/verifyStaffLoginTracking.js && node scripts/verifyStaffLoginLocationPolicy.js && node scripts/verifyDepartmentCountsAndLeadership.js && node scripts/verifyHrDashboardWfhMetric.js",
+    "test": "npm run test:attendance && node scripts/verifySystem.js && node scripts/verifyStaffLoginTracking.js && node scripts/verifyStaffLoginLocationPolicy.js && node scripts/verifyDepartmentCountsAndLeadership.js && node scripts/verifyHrDashboardWfhMetric.js && node scripts/verifyStaffAttendanceHistory.js",
     "test:staff-login": "node scripts/verifyStaffLoginTracking.js",
     "test:attendance": "node scripts/verifyAttendanceSchedule.js && node scripts/verifyAttendanceIntegration.js && node scripts/verifyDepartmentSchedulesAndLateness.js",
     "test:department-schedules": "node scripts/verifyDepartmentSchedulesAndLateness.js",
@@ -20,6 +20,7 @@
     "test:chat": "node scripts/verifySharedDepartmentChat.js",
     "test:dashboard-attendance": "node scripts/verifyDashboardAttendanceMetrics.js",
     "test:wfh-metrics": "node scripts/verifyHrDashboardWfhMetric.js",
+    "test:staff-attendance": "node scripts/verifyStaffAttendanceHistory.js",
     "test:leave-bulk-delete": "node scripts/verifyLeaveBulkDelete.js",
     "test:login-location-policy": "node scripts/verifyStaffLoginLocationPolicy.js",
     "test:departments": "node scripts/verifyDepartmentCountsAndLeadership.js"
