@@ -10,7 +10,11 @@ const HRDocument = require('../models/HRDocument');
 const DailyUpdate = require('../models/DailyUpdate');
 const StaffLoginHistory = require('../models/StaffLoginHistory');
 const { calculateLateness } = require('../utils/scheduleHelper');
-const { summarizeAttendanceDay } = require('./attendanceDashboardMetrics');
+const {
+  summarizeAttendanceDay,
+  isWfhWorkMode,
+  isOfficeWorkMode
+} = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
 const { enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
@@ -86,6 +90,9 @@ class HRService {
       openTasks,
       resignedLast30Days,
       ...metrics,
+      todayWfh: metrics.todayWfh,
+      wfhToday: metrics.todayWfh,
+      wfh: metrics.todayWfh,
       todayLate: metrics.lateArrivals,
       pendingLeaves,
       approvedLeaves
@@ -764,12 +771,16 @@ return {
   }
 
   if (workMode && workMode.toLowerCase() !== 'all') {
-    const modeRegex = new RegExp('^' + workMode.trim() + '$', 'i');
-    const modeEmployees = await Employee.find({ workMode: modeRegex }).select('_id').lean();
-    const modeIds = modeEmployees.map(employee => employee._id);
-    const modeMatch = [{ workMode: modeRegex }];
-    if (modeIds.length) modeMatch.push({ employee: { $in: modeIds }, workMode: { $in: [null, ''] } });
-    filter.$and = [...(filter.$and || []), { $or: modeMatch }];
+    const trimmed = workMode.trim();
+    let modeRegex;
+    if (isWfhWorkMode(trimmed)) {
+      modeRegex = /^(wfh|work[\s_-]?from[\s_-]?home)$/i;
+    } else if (isOfficeWorkMode(trimmed)) {
+      modeRegex = /^office$/i;
+    } else {
+      modeRegex = new RegExp('^' + trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
+    }
+    filter.workMode = modeRegex;
   }
 
   if (status === 'LATE') {
