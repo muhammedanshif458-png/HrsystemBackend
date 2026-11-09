@@ -25,6 +25,22 @@ class AuthService {
       throw new AppError('Your account has been deactivated. Please contact HR.', 403);
     }
 
+    // Defensive check: Verify linked Employee profile status if exists
+    let employeeData = await Employee.findOne({
+      $or: [{ user: user._id }, { email: normalizedEmail }]
+    });
+
+    if (employeeData) {
+      if (employeeData.isDeleted || employeeData.status === 'INACTIVE' || employeeData.status === 'TERMINATED' || employeeData.status === 'RESIGNED') {
+        if (user.isActive) {
+          user.isActive = false;
+          user.refreshToken = null;
+          await user.save();
+        }
+        throw new AppError('Your account has been deactivated. Please contact HR.', 403);
+      }
+    }
+
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       throw new AppError('Invalid email or password', 401);
@@ -51,10 +67,9 @@ class AuthService {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // Fetch linked employee profile if user is STAFF
-    let employeeData = null;
-    if (user.role === 'STAFF') {
-      employeeData = (await Employee.findOne({ user: user._id })) || (await Employee.findOne({ email: user.email }));
+    // If non-STAFF, do not attach employee profile to the returned user object
+    if (user.role !== 'STAFF') {
+      employeeData = null;
     }
 
     const hasValidLocation = Boolean(

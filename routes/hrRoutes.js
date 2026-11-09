@@ -50,6 +50,7 @@ router.delete('/employees/:id', hrController.deleteEmployee);
 router.patch('/employees/:id/status', hrController.updateStatus);
 router.post('/employees/:id/deactivate', hrController.deactivateEmployee);
 router.post('/employees/:id/reactivate', hrController.reactivateEmployee);
+router.post('/employees/:id/restore', hrController.restoreEmployee);
 router.post('/employees/:id/resign', hrController.resignEmployee);
 
 // Salary management with history tracking

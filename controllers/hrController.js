@@ -97,7 +97,8 @@ class HRController {
     try {
       const result = await hrService.deleteEmployee(req.params.id, {
         force: req.query.force === 'true' || req.body?.force === true,
-        hard: req.query.hard === 'true' || req.body?.hard === true
+        hard: req.query.hard === 'true' || req.body?.hard === true,
+        currentUser: req.user
       });
       return sendSuccess(res, result.message, result);
     } catch (err) {
@@ -110,7 +111,10 @@ class HRController {
    */
   async deactivateEmployee(req, res, next) {
     try {
-      const employee = await hrService.deactivateEmployee(req.params.id, req.body);
+      const employee = await hrService.deactivateEmployee(req.params.id, {
+        ...req.body,
+        currentUser: req.user
+      });
       return sendSuccess(res, 'Employee deactivated successfully', employee);
     } catch (err) {
       next(err);
@@ -130,11 +134,26 @@ class HRController {
   }
 
   /**
+   * POST /api/hr/employees/:id/restore
+   */
+  async restoreEmployee(req, res, next) {
+    try {
+      const employee = await hrService.restoreEmployee(req.params.id);
+      return sendSuccess(res, 'Employee restored and reactivated successfully', employee);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * POST /api/hr/employees/:id/resign
    */
   async resignEmployee(req, res, next) {
     try {
-      const employee = await hrService.resignEmployee(req.params.id, req.body);
+      const employee = await hrService.resignEmployee(req.params.id, {
+        ...req.body,
+        currentUser: req.user
+      });
       return sendSuccess(res, 'Employee marked as resigned successfully', employee);
     } catch (err) {
       next(err);
@@ -303,7 +322,10 @@ class HRController {
    */
   async updateStatus(req, res, next) {
     try {
-      const employee = await hrService.updateEmployeeStatus(req.params.id, req.body.status, req.body);
+      const employee = await hrService.updateEmployeeStatus(req.params.id, req.body.status, {
+        ...req.body,
+        currentUser: req.user
+      });
       return sendSuccess(res, 'Employee status updated successfully', employee);
     } catch (err) {
       next(err);

@@ -519,8 +519,22 @@ return {
   /**
    * Delete employee safely preserving referential integrity
    */
-  async deleteEmployee(id, { force = false, hard = false } = {}) {
+  async deleteEmployee(id, { force = false, hard = false, currentUser = null } = {}) {
     const employee = await this.getEmployeeById(id);
+
+    // Prevent deletion of Super Administrator accounts
+    if (employee.user?.role === 'SUPER_ADMIN' || employee.employeeId === 'SA0001' || employee.designation === 'Super Administrator') {
+      throw new AppError('Super Administrator accounts cannot be deleted.', 403);
+    }
+
+    // Prevent self-deletion
+    if (currentUser && employee.user) {
+      const currentUserId = (currentUser._id || currentUser.id || '').toString();
+      const targetUserId = (employee.user._id || employee.user || '').toString();
+      if (currentUserId && targetUserId && currentUserId === targetUserId) {
+        throw new AppError('You cannot delete your own account.', 400);
+      }
+    }
 
     const [attendanceCount, leaveCount, taskCount, documentCount, updateCount] = await Promise.all([
       Attendance.countDocuments({ employee: employee._id }),
@@ -576,8 +590,22 @@ return {
   /**
    * Deactivate an employee (POST /api/hr/employees/:id/deactivate)
    */
-  async deactivateEmployee(id, { reason = '' } = {}) {
+  async deactivateEmployee(id, { reason = '', currentUser = null } = {}) {
     const employee = await this.getEmployeeById(id);
+
+    // Prevent deactivation of Super Administrator accounts
+    if (employee.user?.role === 'SUPER_ADMIN' || employee.employeeId === 'SA0001' || employee.designation === 'Super Administrator') {
+      throw new AppError('Super Administrator accounts cannot be deactivated.', 403);
+    }
+
+    // Prevent self-deactivation
+    if (currentUser && employee.user) {
+      const currentUserId = (currentUser._id || currentUser.id || '').toString();
+      const targetUserId = (employee.user._id || employee.user || '').toString();
+      if (currentUserId && targetUserId && currentUserId === targetUserId) {
+        throw new AppError('You cannot deactivate your own account.', 400);
+      }
+    }
 
     if (employee.isDeleted) {
       throw new AppError('Cannot deactivate a deleted employee', 400);
@@ -628,10 +656,47 @@ return {
   }
 
   /**
+   * Restore a soft-deleted employee (POST /api/hr/employees/:id/restore)
+   */
+  async restoreEmployee(id) {
+    const employee = await this.getEmployeeById(id);
+
+    if (!employee.isDeleted) {
+      throw new AppError('Employee is not deleted', 400);
+    }
+
+    employee.isDeleted = false;
+    employee.deletedAt = null;
+    employee.status = 'ACTIVE';
+    await employee.save();
+
+    if (employee.user) {
+      const userId = employee.user._id || employee.user;
+      await User.findByIdAndUpdate(userId, { isActive: true });
+    }
+
+    return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
+  }
+
+  /**
    * Formally mark an employee as resigned (POST /api/hr/employees/:id/resign)
    */
-  async resignEmployee(id, { resignationDate, reason = '' } = {}) {
+  async resignEmployee(id, { resignationDate, reason = '', currentUser = null } = {}) {
     const employee = await this.getEmployeeById(id);
+
+    // Prevent resigning Super Administrator accounts
+    if (employee.user?.role === 'SUPER_ADMIN' || employee.employeeId === 'SA0001' || employee.designation === 'Super Administrator') {
+      throw new AppError('Super Administrator accounts cannot be marked as resigned.', 403);
+    }
+
+    // Prevent self-resignation through HR employee management
+    if (currentUser && employee.user) {
+      const currentUserId = (currentUser._id || currentUser.id || '').toString();
+      const targetUserId = (employee.user._id || employee.user || '').toString();
+      if (currentUserId && targetUserId && currentUserId === targetUserId) {
+        throw new AppError('You cannot mark your own account as resigned.', 400);
+      }
+    }
 
     if (employee.isDeleted) {
       throw new AppError('Cannot mark a deleted employee as resigned', 400);
@@ -1588,6 +1653,23 @@ return {
 
     if (employee.isDeleted) {
       throw new AppError('Cannot update status of a deleted employee', 400);
+    }
+
+    // Prevent deactivating or resigning Super Administrator accounts
+    if (employee.user?.role === 'SUPER_ADMIN' || employee.employeeId === 'SA0001' || employee.designation === 'Super Administrator') {
+      if (newStatus !== 'ACTIVE') {
+        throw new AppError('Cannot change status of a Super Administrator account.', 403);
+      }
+    }
+
+    // Prevent self-deactivation
+    const currentUser = body.currentUser;
+    if (currentUser && employee.user && newStatus !== 'ACTIVE') {
+      const currentUserId = (currentUser._id || currentUser.id || '').toString();
+      const targetUserId = (employee.user._id || employee.user || '').toString();
+      if (currentUserId && targetUserId && currentUserId === targetUserId) {
+        throw new AppError('You cannot deactivate your own account.', 400);
+      }
     }
 
     if (newStatus === 'RESIGNED') {
