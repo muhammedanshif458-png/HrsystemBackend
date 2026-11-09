@@ -4,6 +4,7 @@ const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
 const Leave = require('../models/Leave');
+const HRDocument = require('../models/HRDocument');
 const { calculateLateness } = require('../utils/scheduleHelper');
 const { AppError } = require('../middleware/errorMiddleware');
 const { normalizeLeaveType, enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
@@ -90,11 +91,19 @@ class StaffService {
     });
     attendanceSummary.totalHours = Math.round(attendanceSummary.totalHours * 100) / 100;
 
-    // Leave counts
-    const [pendingLeaves, approvedLeaves] = await Promise.all([
+    // Leave counts and latest leave request
+    const [pendingLeaves, approvedLeaves, latestLeaveDoc] = await Promise.all([
       Leave.countDocuments({ employee: employee._id, status: 'PENDING' }),
-      Leave.countDocuments({ employee: employee._id, status: 'APPROVED' })
+      Leave.countDocuments({ employee: employee._id, status: 'APPROVED' }),
+      Leave.findOne({ employee: employee._id })
+        .populate('employee', 'employeeId firstName lastName department designation email')
+        .populate('approvedBy', 'firstName lastName email')
+        .populate('document')
+        .sort({ createdAt: -1 })
+        .lean()
     ]);
+
+    const latestLeave = latestLeaveDoc ? enrichLeaveResponse(latestLeaveDoc, 'staff', employee) : null;
 
     return {
       employee: {
@@ -111,7 +120,8 @@ class StaffService {
       todayAttendance: todayAttendance || null,
       attendanceSummary,
       pendingLeaves,
-      approvedLeaves
+      approvedLeaves,
+      latestLeave
     };
   }
 
@@ -836,7 +846,7 @@ class StaffService {
     });
 
     await leave.save();
-    return enrichLeaveResponse(leave, 'staff');
+    return enrichLeaveResponse(leave, 'staff', employee);
   }
 
   /**
@@ -850,13 +860,16 @@ class StaffService {
     const skip = (page - 1) * limit;
 
     const filter = { employee: employee._id };
-    if (status) filter.status = status;
+    if (status && typeof status === 'string' && status.trim().toLowerCase() !== 'all') {
+      filter.status = status.trim().toUpperCase();
+    }
     if (leaveType && typeof leaveType === 'string' && leaveType.trim().toLowerCase() !== 'all') {
       filter.leaveType = normalizeLeaveType(leaveType);
     }
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
+        .populate('employee', 'employeeId firstName lastName department designation email')
         .populate('approvedBy', 'firstName lastName')
         .populate('document')
         .sort({ createdAt: -1 })
@@ -869,7 +882,7 @@ class StaffService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      leaves: enrichLeaveResponses(leaves, 'staff'),
+      leaves: enrichLeaveResponses(leaves, 'staff', employee),
       pagination: { page, limit, total, totalPages }
     };
   }
@@ -887,14 +900,15 @@ class StaffService {
     const leave = await Leave.findOne({
       _id: leaveId,
       employee: employee._id
-    }).populate('approvedBy', 'firstName lastName email')
+    }).populate('employee', 'employeeId firstName lastName department designation email')
+      .populate('approvedBy', 'firstName lastName email')
       .populate('document');
 
     if (!leave) {
       throw new AppError('Leave request not found or access unauthorized', 404);
     }
 
-    return enrichLeaveResponse(leave, 'staff');
+    return enrichLeaveResponse(leave, 'staff', employee);
   }
 
   /**
@@ -923,7 +937,7 @@ class StaffService {
     leave.status = 'CANCELLED';
     await leave.save();
 
-    return leave;
+    return enrichLeaveResponse(leave, 'staff', employee);
   }
 
   /**

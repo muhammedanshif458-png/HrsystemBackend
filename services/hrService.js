@@ -1018,7 +1018,9 @@ return {
       }
     }
 
-    if (status) filter.status = status;
+    if (status && typeof status === 'string' && status.trim().toLowerCase() !== 'all') {
+      filter.status = status.trim().toUpperCase();
+    }
     if (leaveType && typeof leaveType === 'string' && leaveType.trim().toLowerCase() !== 'all') {
       filter.leaveType = normalizeLeaveType(leaveType);
     }

@@ -68,17 +68,81 @@ function formatLeaveTypeDisplay(type) {
 }
 
 /**
- * Enrich a single leave object with medical proof fields and authenticated URLs.
+ * Enrich a single leave object with medical proof fields, employee identifiers, and authenticated URLs.
  *
  * @param {Object} leave  - A plain leave object (from .lean()) or a Mongoose document
  * @param {string} rolePrefix - 'staff' or 'hr' – determines download URL prefix
+ * @param {Object} [employeeContext] - Optional Employee document/object to enrich identifiers
  * @returns {Object} - The enriched leave object (plain JS object)
  */
-function enrichLeaveResponse(leave, rolePrefix = 'staff') {
+function enrichLeaveResponse(leave, rolePrefix = 'staff', employeeContext = null) {
   if (!leave) return leave;
 
   // Convert Mongoose document to plain object if needed
   const obj = (typeof leave.toObject === 'function') ? leave.toObject() : { ...leave };
+
+  // Ensure string 'id' is always present alongside '_id'
+  if (obj._id && !obj.id) {
+    obj.id = obj._id.toString();
+  }
+
+  // ── Employee & Staff Identifiers ───────────────────────────────────────────
+  // StaffHub Flutter matches leave requests by comparing `r.staffId == widget.staffId`.
+  // When staff logs in, StaffHub stores `staff.id` as `employee.employeeId` (e.g. 'EMP1066').
+  // StaffHub parses each leave using: `final staffObj = e['staff'] ?? e['employee'];`
+  // By providing `staff`, `staffId`, and `employeeId` normalized to the staff code,
+  // StaffHub assigns `LeaveRequest.staffId = 'EMP1066'`, which strictly matches `widget.staff.id`.
+  // Only treat obj.employee as a full document when it has employeeId (i.e. is a populated object).
+  // After leave.save() the employee field is a bare ObjectId — in that case, fall back to employeeContext.
+  const empFromObj = (obj.employee && typeof obj.employee === 'object' && obj.employee.employeeId !== undefined)
+    ? obj.employee : null;
+  const empCtx = (employeeContext && typeof employeeContext === 'object') ? employeeContext : null;
+  const effectiveEmp = empFromObj || empCtx;
+
+  const empCode = (effectiveEmp?.employeeId ? String(effectiveEmp.employeeId).trim() : '') ||
+    (typeof obj.employeeId === 'string' && obj.employeeId.trim() ? obj.employeeId.trim() : '');
+
+  const empMongoId = effectiveEmp?._id
+    ? effectiveEmp._id.toString()
+    : (obj.employee ? (typeof obj.employee === 'string' ? obj.employee : obj.employee.toString()) : '');
+
+  const staffIdentifier = empCode || empMongoId;
+
+  if (staffIdentifier) {
+    obj.staffId = staffIdentifier;
+    obj.employeeId = staffIdentifier;
+    obj.staff = staffIdentifier;
+  }
+
+  // Ensure standard employee object structure if context is available
+  if (empCtx && (!obj.employee || typeof obj.employee !== 'object')) {
+    obj.employee = {
+      _id: empMongoId,
+      id: staffIdentifier,
+      employeeId: empCode || empMongoId,
+      firstName: empCtx.firstName || '',
+      lastName: empCtx.lastName || '',
+      department: empCtx.department || '',
+      designation: empCtx.designation || '',
+      email: empCtx.email || ''
+    };
+  } else if (empFromObj && !obj.employee.employeeId && empCode) {
+    obj.employee.employeeId = empCode;
+    obj.employee.id = staffIdentifier;
+  }
+
+  // ── Date & Timing Aliases ──────────────────────────────────────────────────
+  if (obj.startDate && !obj.fromDate) {
+    obj.fromDate = obj.startDate;
+  }
+  if (obj.endDate && !obj.toDate) {
+    obj.toDate = obj.endDate;
+  }
+  if (obj.createdAt) {
+    if (!obj.appliedAt) obj.appliedAt = obj.createdAt;
+    if (!obj.submittedDate) obj.submittedDate = obj.createdAt;
+    if (!obj.submissionDate) obj.submissionDate = obj.createdAt;
+  }
 
   // Resolve document reference (may be populated object or bare ObjectId)
   const docRef = obj.document;
@@ -138,12 +202,17 @@ function enrichLeaveResponse(leave, rolePrefix = 'staff') {
     obj.documentUrl = `/api/${rolePrefix}/documents/${docId}/download`;
   }
 
-  // ── Compute totalDays if absent ────────────────────────────────────────
-  if (obj.startDate && obj.endDate && !obj.totalDays) {
-    const start = new Date(obj.startDate);
-    const end = new Date(obj.endDate);
-    const diff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-    obj.totalDays = diff > 0 ? diff : 1;
+  // ── Compute totalDays and daysCount if absent ───────────────────────────
+  if (obj.startDate && obj.endDate) {
+    if (!obj.totalDays) {
+      const start = new Date(obj.startDate);
+      const end = new Date(obj.endDate);
+      const diff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+      obj.totalDays = diff > 0 ? diff : 1;
+    }
+    if (!obj.daysCount) {
+      obj.daysCount = obj.totalDays;
+    }
   }
 
   return obj;
@@ -152,9 +221,9 @@ function enrichLeaveResponse(leave, rolePrefix = 'staff') {
 /**
  * Enrich an array of leave objects.
  */
-function enrichLeaveResponses(leaves, rolePrefix = 'staff') {
+function enrichLeaveResponses(leaves, rolePrefix = 'staff', employeeContext = null) {
   if (!Array.isArray(leaves)) return leaves;
-  return leaves.map(l => enrichLeaveResponse(l, rolePrefix));
+  return leaves.map(l => enrichLeaveResponse(l, rolePrefix, employeeContext));
 }
 
 module.exports = {
