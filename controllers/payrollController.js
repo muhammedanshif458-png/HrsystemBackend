@@ -102,6 +102,172 @@ class PayrollController {
       next(err);
     }
   }
+
+  /**
+   * POST /api/hr/payroll/batches/draft
+   * POST /api/hr/payroll/batches
+   */
+  async createDraftBatch(req, res, next) {
+    try {
+      const now = new Date();
+      const year = parseInt(req.body.year || req.query.year, 10) || now.getFullYear();
+      const month = parseInt(req.body.month || req.query.month, 10) || now.getMonth() + 1;
+      const department = req.body.department || req.query.department || 'all';
+      const notes = req.body.notes || '';
+
+      const result = await payrollService.createOrUpdateDraftBatch(
+        year,
+        month,
+        department,
+        req.user,
+        notes
+      );
+
+      return sendSuccess(res, 'Payroll draft batch created successfully', result, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/payroll/batches/finalize
+   * POST /api/hr/payroll/batches/:batchId/finalize
+   */
+  async finalizeBatch(req, res, next) {
+    try {
+      let batchId = req.params.batchId || req.body.batchId;
+
+      // If batchId is not directly passed, check if year and month were passed to locate draft
+      if (!batchId && (req.body.year && req.body.month)) {
+        const year = parseInt(req.body.year, 10);
+        const month = parseInt(req.body.month, 10);
+        const department = req.body.department || 'all';
+        const PayrollBatch = require('../models/PayrollBatch');
+        const draft = await PayrollBatch.findOne({
+          year,
+          month,
+          department: new RegExp(`^${department}$`, 'i'),
+          status: 'DRAFT'
+        });
+        if (draft) {
+          batchId = draft._id;
+        }
+      }
+
+      if (!batchId) {
+        const { AppError } = require('../middleware/errorMiddleware');
+        throw new AppError('batchId is required to finalize payroll', 400);
+      }
+
+      const finalized = await payrollService.finalizePayrollBatch(batchId, req.user);
+      return sendSuccess(res, 'Payroll batch finalized successfully', finalized);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/payroll/batches/:batchId/pay
+   */
+  async markBatchAsPaid(req, res, next) {
+    try {
+      const { batchId } = req.params;
+      const { paymentMethod, reference, remarks } = req.body;
+
+      const paidBatch = await payrollService.markBatchAsPaid(
+        batchId,
+        { paymentMethod, reference, remarks },
+        req.user
+      );
+
+      return sendSuccess(res, 'Payroll batch marked as paid successfully', paidBatch);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/payroll/batches?year=YYYY&month=MM&department=xxx&status=xxx
+   */
+  async getBatches(req, res, next) {
+    try {
+      const { year, month, department, status, page, limit } = req.query;
+      const result = await payrollService.getBatches({
+        year,
+        month,
+        department,
+        status,
+        page,
+        limit
+      });
+
+      return sendSuccess(res, 'Payroll batches retrieved successfully', result.batches, 200, result.pagination);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/payroll/batches/:batchId?page=1&limit=50&search=xxx
+   */
+  async getBatchById(req, res, next) {
+    try {
+      const { batchId } = req.params;
+      const { page, limit, search } = req.query;
+
+      const result = await payrollService.getBatchById(batchId, {
+        page,
+        limit,
+        search
+      });
+
+      return sendSuccess(res, 'Payroll batch details retrieved successfully', result.batch, 200, {
+        records: result.records,
+        pagination: result.pagination
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/payroll/batches/:batchId/employees/:employeeId/payslip
+   */
+  async getEmployeePayslip(req, res, next) {
+    try {
+      const { batchId, employeeId } = req.params;
+      const payslip = await payrollService.getEmployeePayslip(batchId, employeeId);
+      return sendSuccess(res, 'Employee payslip retrieved successfully', payslip);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/staff/payslips
+   */
+  async getStaffPayslips(req, res, next) {
+    try {
+      const { page, limit } = req.query;
+      const result = await payrollService.getStaffPayslips(req.user, { page, limit });
+      return sendSuccess(res, 'Staff payslips retrieved successfully', result.payslips, 200, result.pagination);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/staff/payslips/:batchId
+   */
+  async getStaffPayslipByBatchId(req, res, next) {
+    try {
+      const { batchId } = req.params;
+      const payslip = await payrollService.getStaffPayslipByBatchId(req.user, batchId);
+      return sendSuccess(res, 'Staff payslip retrieved successfully', payslip);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new PayrollController();

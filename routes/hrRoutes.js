@@ -91,6 +91,16 @@ router.get('/payroll/conflicts', payrollController.getConflicts);
 router.post('/payroll/conflicts/:conflictId/resolve', payrollController.resolveConflict);
 router.get('/payroll/employees/:employeeId', payrollController.getEmployeePayrollById);
 
+// Payroll Batches, Finalization & Payslip Endpoints
+router.post('/payroll/batches', payrollController.createDraftBatch);
+router.post('/payroll/batches/draft', payrollController.createDraftBatch);
+router.get('/payroll/batches', payrollController.getBatches);
+router.post('/payroll/batches/finalize', payrollController.finalizeBatch);
+router.post('/payroll/batches/:batchId/finalize', payrollController.finalizeBatch);
+router.post('/payroll/batches/:batchId/pay', payrollController.markBatchAsPaid);
+router.get('/payroll/batches/:batchId', payrollController.getBatchById);
+router.get('/payroll/batches/:batchId/employees/:employeeId/payslip', payrollController.getEmployeePayslip);
+
 // Task Management Endpoints
 router.get('/tasks', taskController.getTasks);
 router.post('/tasks', taskController.createTask);

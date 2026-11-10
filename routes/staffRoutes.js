@@ -5,6 +5,7 @@ const documentController = require('../controllers/documentController');
 const taskController = require('../controllers/taskController');
 const chatController = require('../controllers/chatController');
 const dailyUpdateController = require('../controllers/dailyUpdateController');
+const payrollController = require('../controllers/payrollController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
 const { leaveAttachmentUpload } = require('../middleware/documentUploadMiddleware');
@@ -97,5 +98,9 @@ router.delete('/departments/:deptKey/messages/:messageId', departmentChatAuth, c
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', departmentChatAuth, chatController.deleteMessageForMe);
 router.delete('/departments/:departmentKey/messages/:messageId', departmentChatAuth, chatController.deleteMessageForEveryone);
 router.patch('/departments/:departmentKey/messages/:messageId/delete-for-me', departmentChatAuth, chatController.deleteMessageForMe);
+
+// Staff Payslip Endpoints (Strictly scoped to authenticated staff user and finalized/paid batches)
+router.get('/payslips', staffOnly, payrollController.getStaffPayslips);
+router.get('/payslips/:batchId', staffOnly, payrollController.getStaffPayslipByBatchId);
 
 module.exports = router;

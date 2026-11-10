@@ -62,8 +62,18 @@ This document provides an audit and coverage matrix comparing the LY SOFTWARE HR
 | **Reports** | `/api/hr/reports/attendance` | GET | HR | Implemented | Attendance summary and department breakdown |
 | **Reports** | `/api/hr/reports/leaves` | GET | HR | Implemented | Leave status and type breakdown |
 | **Payroll** | `/api/hr/payroll/summary` | GET | HR | Implemented | Aggregated expenditure, deductions, net payout by month & year |
-| **Payroll** | `/api/hr/payroll/employees` | GET | HR | Implemented | Itemized payroll list with daily rate, working days, unpaid leaves |
-| **Payroll** | `/api/hr/payroll/employees/:employeeId` | GET | HR | Implemented | Single employee detailed payroll calculation |
+| **Payroll** | `/api/hr/payroll/employees` | GET | HR | Implemented | Itemized payroll list with attendance-based payable days, daily rate, deductions |
+| **Payroll** | `/api/hr/payroll/employees/:employeeId` | GET | HR | Implemented | Single employee detailed payroll calculation with complete calendar breakdown |
+| **Payroll** | `/api/hr/payroll/conflicts` | GET | HR | Implemented | List attendance and approved leave same-date conflicts for a month |
+| **Payroll** | `/api/hr/payroll/conflicts/:conflictId/resolve` | POST | HR | Implemented | Resolve payroll conflict (PRESENT, PAID_LEAVE, UNPAID_LEAVE) with audit trail |
+| **Payroll Batches** | `/api/hr/payroll/batches` | POST | HR | Implemented | Safe creation and update of DRAFT payroll batches with calculation snapshots |
+| **Payroll Batches** | `/api/hr/payroll/batches` | GET | HR | Implemented | List historical payroll batches with month/year/status filtering and pagination |
+| **Payroll Batches** | `/api/hr/payroll/batches/:batchId` | GET | HR | Implemented | Retrieve single payroll batch details with itemized employee records |
+| **Payroll Finalization** | `/api/hr/payroll/batches/finalize` | POST | HR | Implemented | Locks payroll batch as FINALIZED, verifies totals, strictly blocks if unresolved conflicts |
+| **Payroll Payment** | `/api/hr/payroll/batches/:batchId/pay` | POST | HR | Implemented | Confirms payout and marks finalized batch as PAID with payment metadata |
+| **Payslip (HR)** | `/api/hr/payroll/batches/:batchId/employees/:employeeId/payslip` | GET | HR | Implemented | Detailed payslip payload generated from immutable PayrollRecord snapshot |
+| **Payslips (Staff)** | `/api/staff/payslips` | GET | STAFF | Implemented | Authenticated staff list of finalized and paid payslips (DRAFT hidden) |
+| **Payslip (Staff)** | `/api/staff/payslips/:batchId` | GET | STAFF | Implemented | Authenticated staff single payslip view (strictly scoped to self and finalized batches) |
 | **Tasks** | `/api/hr/tasks` | GET | HR | Implemented | Lists tasks with filters (`status`, `department`, `employeeId`) |
 | **Tasks** | `/api/hr/tasks` | POST | HR | Implemented | Assigns new task to employee with due date |
 | **Tasks** | `/api/hr/tasks/:id` | GET | HR | Implemented | Gets single task details |

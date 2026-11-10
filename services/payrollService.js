@@ -4,6 +4,8 @@ const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
 const PayrollConflict = require('../models/PayrollConflict');
+const PayrollBatch = require('../models/PayrollBatch');
+const PayrollRecord = require('../models/PayrollRecord');
 const { AppError } = require('../middleware/errorMiddleware');
 
 /**
@@ -603,6 +605,529 @@ class PayrollService {
     await conflict.save();
 
     return conflict;
+  }
+
+  /**
+   * Safe Draft Payroll Batch Creation
+   * 1. Validates year and month.
+   * 2. Prevents overlapping all-department and department-specific batches.
+   * 3. Prevents modifying already FINALIZED or PAID batches.
+   * 4. Runs calculation engine and saves snapshot into PayrollBatch and PayrollRecord.
+   */
+  async createOrUpdateDraftBatch(year, month, department = 'all', creatorUser = null, notes = '') {
+    year = parseInt(year, 10);
+    month = parseInt(month, 10);
+    if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
+      throw new AppError('Valid year (e.g. 2026) and month (1-12) are required', 400);
+    }
+    department = String(department || 'all').trim();
+
+    // Check for overlapping all-department vs specific-department batches
+    if (department.toLowerCase() === 'all') {
+      const specificBatch = await PayrollBatch.findOne({
+        year,
+        month,
+        department: { $ne: 'all' }
+      }).lean();
+      if (specificBatch) {
+        throw new AppError(
+          `Cannot create an all-department batch: a department-specific batch for "${specificBatch.department}" already exists for ${month}/${year}. Complete or delete individual department batches first.`,
+          400
+        );
+      }
+    } else {
+      const allBatch = await PayrollBatch.findOne({
+        year,
+        month,
+        department: 'all'
+      }).lean();
+      if (allBatch) {
+        throw new AppError(
+          `Cannot create a department-specific batch: an all-department batch already exists for ${month}/${year}.`,
+          400
+        );
+      }
+    }
+
+    // Check if a batch for this exact scope already exists
+    const existingBatch = await PayrollBatch.findOne({
+      year,
+      month,
+      department: new RegExp(`^${department}$`, 'i')
+    });
+
+    if (existingBatch && (existingBatch.status === 'FINALIZED' || existingBatch.status === 'PAID')) {
+      throw new AppError(
+        `Payroll batch for ${department} (${month}/${year}) is already ${existingBatch.status} and cannot be modified.`,
+        400
+      );
+    }
+
+    // Run calculation for all eligible employees
+    const { payrollRecords } = await this.getEmployeesPayroll(year, month, {
+      department,
+      limit: 5000
+    });
+
+    let totalMonthlyBaseSalary = 0;
+    let totalDeductions = 0;
+    let totalNetPayout = 0;
+    let totalUnresolvedConflicts = 0;
+
+    for (const rec of payrollRecords) {
+      totalMonthlyBaseSalary += rec.monthlyBaseSalary;
+      totalDeductions += rec.deductions;
+      totalNetPayout += rec.netSalary;
+      totalUnresolvedConflicts += rec.unresolvedConflictCount;
+    }
+
+    totalMonthlyBaseSalary = Math.round(totalMonthlyBaseSalary * 100) / 100;
+    totalDeductions = Math.round(totalDeductions * 100) / 100;
+    totalNetPayout = Math.round(totalNetPayout * 100) / 100;
+
+    let batch;
+    if (existingBatch) {
+      existingBatch.grossSalary = totalMonthlyBaseSalary;
+      existingBatch.totalMonthlyBaseSalary = totalMonthlyBaseSalary;
+      existingBatch.totalDeductions = totalDeductions;
+      existingBatch.netPay = totalNetPayout;
+      existingBatch.totalNetPayout = totalNetPayout;
+      existingBatch.employeeCount = payrollRecords.length;
+      existingBatch.unresolvedConflictCount = totalUnresolvedConflicts;
+      if (notes) existingBatch.notes = notes;
+      if (creatorUser) existingBatch.createdBy = creatorUser._id;
+      await existingBatch.save();
+      await PayrollRecord.deleteMany({ batchId: existingBatch._id });
+      batch = existingBatch;
+    } else {
+      batch = await PayrollBatch.create({
+        year,
+        month,
+        department,
+        status: 'DRAFT',
+        grossSalary: totalMonthlyBaseSalary,
+        totalMonthlyBaseSalary,
+        totalDeductions,
+        netPay: totalNetPayout,
+        totalNetPayout,
+        employeeCount: payrollRecords.length,
+        unresolvedConflictCount: totalUnresolvedConflicts,
+        createdBy: creatorUser?._id,
+        notes
+      });
+    }
+
+    // Persist immutable snapshots in PayrollRecord
+    const recordDocs = payrollRecords.map((item) => ({
+      batchId: batch._id,
+      employee: item.employee.id,
+      employeeId: item.employee.employeeId,
+      employeeName: item.employee.name,
+      department: item.employee.department,
+      designation: item.employee.designation || '',
+      monthlyBaseSalary: item.monthlyBaseSalary,
+      salaryCurrency: item.employee.salaryCurrency || 'INR',
+      scheduledWorkingDays: item.scheduledWorkingDays,
+      presentDays: item.presentDays,
+      halfDays: item.halfDays,
+      wfhDays: item.wfhDays,
+      weeklyOffs: item.weeklyOffs,
+      holidays: item.holidays,
+      paidLeaveDays: item.approvedPaidLeaveDays,
+      unpaidLeaveDays: item.approvedUnpaidLeaveDays,
+      lopDays: item.lopDays,
+      payableDays: item.payableDays,
+      dailySalary: item.dailySalary,
+      grossPay: item.monthlyBaseSalary,
+      deductions: item.deductions,
+      netPay: item.netSalary,
+      calculationBreakdown: item
+    }));
+
+    if (recordDocs.length > 0) {
+      await PayrollRecord.insertMany(recordDocs);
+    }
+
+    return {
+      batch,
+      summary: {
+        batchId: batch._id,
+        year,
+        month,
+        department,
+        status: batch.status,
+        employeeCount: batch.employeeCount,
+        totalMonthlyBaseSalary,
+        totalDeductions,
+        totalNetPayout,
+        unresolvedConflictCount: totalUnresolvedConflicts,
+        hasUnresolvedConflicts: totalUnresolvedConflicts > 0
+      }
+    };
+  }
+
+  /**
+   * Finalize Payroll Batch
+   * Requirements:
+   * - Authorized HR/Super Admin
+   * - Existing valid DRAFT batch
+   * - Revalidate unresolved conflicts; strictly block if any unresolved conflict exists
+   * - Verify totals against saved records
+   * - Prevent duplicate finalization
+   * - Mark status FINALIZED, record finalizedBy and finalizedAt
+   */
+  async finalizePayrollBatch(batchId, finalizedByUser = null) {
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      throw new AppError('Invalid payroll batch ID format', 400);
+    }
+
+    const batch = await PayrollBatch.findById(batchId);
+    if (!batch) {
+      throw new AppError('Payroll batch not found', 404);
+    }
+
+    if (batch.status === 'FINALIZED') {
+      throw new AppError('Payroll batch is already finalized', 400);
+    }
+    if (batch.status === 'PAID') {
+      throw new AppError('Payroll batch is already paid', 400);
+    }
+
+    // Revalidate unresolved conflicts
+    const unresolvedConflicts = await PayrollConflict.countDocuments({
+      year: batch.year,
+      month: batch.month,
+      status: 'UNRESOLVED'
+    });
+
+    if (unresolvedConflicts > 0 || batch.unresolvedConflictCount > 0) {
+      throw new AppError(
+        `Cannot finalize payroll batch: ${unresolvedConflicts} unresolved attendance/leave conflict(s) exist for ${batch.month}/${batch.year}. Resolve all conflicts before finalization.`,
+        400
+      );
+    }
+
+    // Verify against saved PayrollRecord snapshots
+    const records = await PayrollRecord.find({ batchId: batch._id });
+    if (records.length === 0 && batch.employeeCount > 0) {
+      throw new AppError('Cannot finalize payroll batch: saved payroll records are missing.', 400);
+    }
+
+    const sumGross = Math.round(records.reduce((acc, r) => acc + r.monthlyBaseSalary, 0) * 100) / 100;
+    const sumDeductions = Math.round(records.reduce((acc, r) => acc + r.deductions, 0) * 100) / 100;
+    const sumNet = Math.round(records.reduce((acc, r) => acc + r.netPay, 0) * 100) / 100;
+
+    batch.grossSalary = sumGross;
+    batch.totalMonthlyBaseSalary = sumGross;
+    batch.totalDeductions = sumDeductions;
+    batch.netPay = sumNet;
+    batch.totalNetPayout = sumNet;
+    batch.employeeCount = records.length;
+    batch.status = 'FINALIZED';
+    batch.finalizedBy = finalizedByUser?._id || null;
+    batch.finalizedAt = new Date();
+
+    await batch.save();
+
+    return batch;
+  }
+
+  /**
+   * Mark a Finalized Payroll Batch as Paid
+   */
+  async markBatchAsPaid(batchId, { paymentMethod = 'BANK_TRANSFER', reference = '', remarks = '' } = {}, paidByUser = null) {
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      throw new AppError('Invalid payroll batch ID format', 400);
+    }
+
+    const batch = await PayrollBatch.findById(batchId);
+    if (!batch) {
+      throw new AppError('Payroll batch not found', 404);
+    }
+
+    if (batch.status === 'DRAFT') {
+      throw new AppError('Cannot pay an unfinalized payroll batch. Finalize the batch first.', 400);
+    }
+    if (batch.status === 'PAID') {
+      throw new AppError('Payroll batch has already been marked as paid.', 400);
+    }
+
+    batch.status = 'PAID';
+    batch.paidAt = new Date();
+    batch.paymentDetails = {
+      paymentMethod: String(paymentMethod || 'BANK_TRANSFER').trim(),
+      reference: String(reference || '').trim(),
+      remarks: String(remarks || '').trim(),
+      paidBy: paidByUser?._id || null
+    };
+
+    await batch.save();
+
+    return batch;
+  }
+
+  /**
+   * Get list of historical payroll batches
+   */
+  async getBatches({ year, month, department, status, page = 1, limit = 20 } = {}) {
+    const query = {};
+    if (year) query.year = parseInt(year, 10);
+    if (month) query.month = parseInt(month, 10);
+    if (department && department !== 'all') {
+      query.department = new RegExp(`^${department.trim()}$`, 'i');
+    }
+    if (status && status !== 'all') {
+      query.status = status.toUpperCase();
+    }
+
+    page = Math.max(1, parseInt(page, 10));
+    limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+    const skip = (page - 1) * limit;
+
+    const [batches, total] = await Promise.all([
+      PayrollBatch.find(query)
+        .populate('createdBy', 'firstName lastName email')
+        .populate('finalizedBy', 'firstName lastName email')
+        .populate('paymentDetails.paidBy', 'firstName lastName email')
+        .sort({ year: -1, month: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      PayrollBatch.countDocuments(query)
+    ]);
+
+    return {
+      batches,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    };
+  }
+
+  /**
+   * Get single payroll batch details with records
+   */
+  async getBatchById(batchId, { page = 1, limit = 50, search = '' } = {}) {
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      throw new AppError('Invalid payroll batch ID format', 400);
+    }
+
+    const batch = await PayrollBatch.findById(batchId)
+      .populate('createdBy', 'firstName lastName email')
+      .populate('finalizedBy', 'firstName lastName email')
+      .populate('paymentDetails.paidBy', 'firstName lastName email')
+      .lean();
+
+    if (!batch) {
+      throw new AppError('Payroll batch not found', 404);
+    }
+
+    const recordQuery = { batchId: batch._id };
+    if (search && search.trim() !== '') {
+      const regex = new RegExp(search.trim(), 'i');
+      recordQuery.$or = [
+        { employeeName: regex },
+        { employeeId: regex },
+        { department: regex },
+        { designation: regex }
+      ];
+    }
+
+    page = Math.max(1, parseInt(page, 10));
+    limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+    const skip = (page - 1) * limit;
+
+    const [records, total] = await Promise.all([
+      PayrollRecord.find(recordQuery)
+        .sort({ department: 1, employeeName: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      PayrollRecord.countDocuments(recordQuery)
+    ]);
+
+    return {
+      batch,
+      records,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    };
+  }
+
+  /**
+   * Generate structured payslip payload from saved PayrollRecord snapshot
+   */
+  async getEmployeePayslip(batchId, employeeIdentifier) {
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      throw new AppError('Invalid payroll batch ID format', 400);
+    }
+
+    const batch = await PayrollBatch.findById(batchId).lean();
+    if (!batch) {
+      throw new AppError('Payroll batch not found', 404);
+    }
+
+    const query = { batchId: batch._id };
+    if (mongoose.Types.ObjectId.isValid(employeeIdentifier)) {
+      query.$or = [{ employee: employeeIdentifier }, { employeeId: employeeIdentifier.toUpperCase() }];
+    } else {
+      query.employeeId = employeeIdentifier.toUpperCase();
+    }
+
+    const record = await PayrollRecord.findOne(query).lean();
+    if (!record) {
+      throw new AppError('Payroll record not found for this employee in the specified batch', 404);
+    }
+
+    return {
+      company: {
+        name: 'LY Software',
+        division: 'HR Management Operations',
+        currency: record.salaryCurrency || 'INR'
+      },
+      payslip: {
+        batchId: batch._id,
+        year: batch.year,
+        month: batch.month,
+        period: `${batch.year}-${String(batch.month).padStart(2, '0')}`,
+        batchStatus: batch.status,
+        finalizedAt: batch.finalizedAt,
+        paidAt: batch.paidAt,
+        employee: {
+          id: record.employee,
+          employeeId: record.employeeId,
+          name: record.employeeName,
+          department: record.department,
+          designation: record.designation
+        },
+        calendar: {
+          scheduledWorkingDays: record.scheduledWorkingDays,
+          weeklyOffs: record.weeklyOffs,
+          holidays: record.holidays,
+          presentDays: record.presentDays,
+          halfDays: record.halfDays,
+          wfhDays: record.wfhDays,
+          paidLeaveDays: record.paidLeaveDays,
+          unpaidLeaveDays: record.unpaidLeaveDays,
+          lopDays: record.lopDays,
+          payableDays: record.payableDays
+        },
+        earnings: [
+          { title: 'Monthly Base Salary', amount: record.monthlyBaseSalary },
+          { title: 'Payable Salary', amount: record.grossPay }
+        ],
+        deductions: [
+          { title: 'Unpaid Leave & Loss of Pay', amount: record.deductions }
+        ],
+        summary: {
+          dailySalary: record.dailySalary,
+          grossPay: record.grossPay,
+          totalDeductions: record.deductions,
+          netPay: record.netPay
+        },
+        calculationBreakdown: record.calculationBreakdown,
+        pdfExportSupported: false,
+        pdfExportNote: 'Structured payslip payload ready for client-side rendering or PDF export'
+      }
+    };
+  }
+
+  /**
+   * Staff-Facing: Get all finalized payslips for the authenticated staff user
+   */
+  async getStaffPayslips(user, { page = 1, limit = 20 } = {}) {
+    const employee = await Employee.findOne({ user: user._id }).lean();
+    if (!employee) {
+      throw new AppError('Staff employee record not found for authenticated user', 404);
+    }
+
+    page = Math.max(1, parseInt(page, 10));
+    limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
+    const skip = (page - 1) * limit;
+
+    // Only return records from batches that are FINALIZED or PAID (never DRAFT)
+    const finalizedBatches = await PayrollBatch.find({
+      status: { $in: ['FINALIZED', 'PAID'] }
+    }).select('_id year month status finalizedAt paidAt').lean();
+
+    const finalizedBatchIds = finalizedBatches.map(b => b._id);
+
+    const [records, total] = await Promise.all([
+      PayrollRecord.find({
+        employee: employee._id,
+        batchId: { $in: finalizedBatchIds }
+      })
+        .populate('batchId', 'year month department status finalizedAt paidAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      PayrollRecord.countDocuments({
+        employee: employee._id,
+        batchId: { $in: finalizedBatchIds }
+      })
+    ]);
+
+    const payslips = records.map(r => ({
+      payslipId: r._id,
+      batchId: r.batchId?._id,
+      year: r.batchId?.year,
+      month: r.batchId?.month,
+      period: r.batchId ? `${r.batchId.year}-${String(r.batchId.month).padStart(2, '0')}` : '',
+      department: r.department,
+      designation: r.designation,
+      monthlyBaseSalary: r.monthlyBaseSalary,
+      payableDays: r.payableDays,
+      scheduledWorkingDays: r.scheduledWorkingDays,
+      grossPay: r.grossPay,
+      deductions: r.deductions,
+      netPay: r.netPay,
+      status: r.batchId?.status,
+      finalizedAt: r.batchId?.finalizedAt,
+      paidAt: r.batchId?.paidAt
+    }));
+
+    return {
+      payslips,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    };
+  }
+
+  /**
+   * Staff-Facing: Get single detailed payslip strictly scoped to authenticated user
+   */
+  async getStaffPayslipByBatchId(user, batchId) {
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      throw new AppError('Invalid payroll batch ID format', 400);
+    }
+
+    const employee = await Employee.findOne({ user: user._id }).lean();
+    if (!employee) {
+      throw new AppError('Staff employee record not found for authenticated user', 404);
+    }
+
+    const batch = await PayrollBatch.findById(batchId).lean();
+    if (!batch) {
+      throw new AppError('Payroll batch not found', 404);
+    }
+
+    if (batch.status === 'DRAFT') {
+      throw new AppError('Payslip is not yet available for unfinalized payroll', 403);
+    }
+
+    return await this.getEmployeePayslip(batchId, employee._id.toString());
   }
 }
 
