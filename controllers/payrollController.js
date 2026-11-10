@@ -27,11 +27,12 @@ class PayrollController {
       const now = new Date();
       const month = parseInt(req.query.month, 10) || now.getMonth() + 1;
       const year = parseInt(req.query.year, 10) || now.getFullYear();
-      const { department, search, page, limit } = req.query;
+      const { department, search, status, page, limit } = req.query;
 
       const { payrollRecords, pagination } = await payrollService.getEmployeesPayroll(year, month, {
         department,
         search,
+        status,
         page,
         limit
       });
@@ -53,6 +54,50 @@ class PayrollController {
 
       const payroll = await payrollService.getSingleEmployeePayroll(req.params.employeeId, year, month);
       return sendSuccess(res, 'Employee payroll details retrieved successfully', payroll);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/hr/payroll/conflicts?month=MM&year=YYYY&department=xxx&status=xxx
+   */
+  async getConflicts(req, res, next) {
+    try {
+      const now = new Date();
+      const month = parseInt(req.query.month, 10) || now.getMonth() + 1;
+      const year = parseInt(req.query.year, 10) || now.getFullYear();
+      const { department, status, employeeId, page, limit } = req.query;
+
+      const result = await payrollService.getConflicts(year, month, {
+        department,
+        status,
+        employeeId,
+        page,
+        limit
+      });
+
+      return sendSuccess(res, 'Payroll conflicts retrieved successfully', result.conflicts, 200, result.pagination);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/hr/payroll/conflicts/:conflictId/resolve
+   */
+  async resolveConflict(req, res, next) {
+    try {
+      const { conflictId } = req.params;
+      const { decision, reason } = req.body;
+
+      const resolved = await payrollService.resolveConflict(
+        conflictId,
+        { decision, reason },
+        req.user
+      );
+
+      return sendSuccess(res, 'Payroll conflict resolved successfully', resolved);
     } catch (err) {
       next(err);
     }

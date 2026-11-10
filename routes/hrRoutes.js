@@ -87,6 +87,8 @@ router.get('/reports/leaves', hrController.getLeaveReports);
 // Payroll Endpoints
 router.get('/payroll/summary', payrollController.getSummary);
 router.get('/payroll/employees', payrollController.getEmployeesPayroll);
+router.get('/payroll/conflicts', payrollController.getConflicts);
+router.post('/payroll/conflicts/:conflictId/resolve', payrollController.resolveConflict);
 router.get('/payroll/employees/:employeeId', payrollController.getEmployeePayrollById);
 
 // Task Management Endpoints

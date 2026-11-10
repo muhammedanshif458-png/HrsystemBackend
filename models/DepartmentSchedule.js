@@ -46,6 +46,14 @@ const departmentScheduleSchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    workingDays: {
+      type: [Number],
+      default: undefined
+    },
+    holidays: {
+      type: [String],
+      default: []
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -134,6 +142,38 @@ departmentScheduleSchema.statics.getEffectiveSchedule = async function(departmen
   return this.findOne({ $or: deptQuery })
     .sort({ effectiveDate: -1, createdAt: -1 })
     .lean();
+};
+
+/**
+ * Resolves configured working days of week (0=Sunday, 1=Monday, ..., 6=Saturday)
+ * Priority:
+ * 1. Explicit workingDays array configured on DepartmentSchedule document
+ * 2. Canonical department key: TECH -> [1,2,3,4,5] (Mon-Fri)
+ * 3. Canonical department key: TELECALLING -> [1,2,3,4,5,6] (Mon-Sat)
+ * 4. Default: [1,2,3,4,5,6] (Mon-Sat)
+ */
+departmentScheduleSchema.statics.getWorkingDaysForSchedule = function(schedule, departmentName) {
+  if (schedule && Array.isArray(schedule.workingDays) && schedule.workingDays.length > 0) {
+    return schedule.workingDays;
+  }
+  const canonical = this.toCanonicalDeptKey(departmentName || schedule?.department || '');
+  if (canonical === 'TECH') {
+    return [1, 2, 3, 4, 5];
+  }
+  if (canonical === 'TELECALLING') {
+    return [1, 2, 3, 4, 5, 6];
+  }
+  return [1, 2, 3, 4, 5, 6];
+};
+
+/**
+ * Resolves configured company holidays array for a schedule or department
+ */
+departmentScheduleSchema.statics.getHolidaysForSchedule = function(schedule) {
+  if (schedule && Array.isArray(schedule.holidays)) {
+    return schedule.holidays;
+  }
+  return [];
 };
 
 const DepartmentSchedule = mongoose.models.DepartmentSchedule || mongoose.model('DepartmentSchedule', departmentScheduleSchema);

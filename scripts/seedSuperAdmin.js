@@ -23,6 +23,11 @@ async function restoreSuperAdminAccount({
   logger.info('================================================================');
   logger.info(`Validating target account: Email=${targetEmail}, EmployeeID=${targetEmployeeId}`);
 
+  const openedConnection = mongoose.connection.readyState === 0;
+  if (openedConnection) {
+    await connectDB();
+  }
+
   // 1. Validate Target User
   const existingUser = await User.findOne({ email: targetEmail }).select('+password');
   if (!existingUser) {
@@ -85,6 +90,9 @@ async function restoreSuperAdminAccount({
 
   if (isAlreadyRestored) {
     logger.info('✓ Target account is already fully restored, active, and properly linked. No changes required.');
+    if (openedConnection) {
+      await disconnectDB();
+    }
     return {
       success: true,
       restored: false,
@@ -223,6 +231,10 @@ async function restoreSuperAdminAccount({
   logger.info('================================================================');
   logger.info('   SUPER ADMIN ACCOUNT RESTORATION COMPLETED SUCCESSFULLY       ');
   logger.info('================================================================');
+
+  if (openedConnection) {
+    await disconnectDB();
+  }
 
   return {
     success: true,

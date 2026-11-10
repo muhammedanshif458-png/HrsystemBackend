@@ -30,6 +30,8 @@ app.use(helmet({
 
 // 5. Enable CORS
 const defaultAllowedOrigins = [
+  'http://localhost:60895',
+  'http://127.0.0.1:60895',
   'http://localhost:50250',
   'http://127.0.0.1:50250',
   'http://localhost:51834',
@@ -39,10 +41,13 @@ const defaultAllowedOrigins = [
 ];
 
 const configuredOrigins = (env.clientUrl && env.clientUrl !== '*')
-  ? env.clientUrl.split(',').map((url) => url.trim()).filter(Boolean)
+  ? env.clientUrl.split(',').map((url) => url.trim().replace(/\/+$/, '')).filter(Boolean)
   : [];
 
-const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...configuredOrigins]));
+const allowedOrigins = Array.from(new Set([
+  ...defaultAllowedOrigins.map((o) => o.replace(/\/+$/, '')),
+  ...configuredOrigins
+]));
 
 const corsOptions = {
   origin: (origin, callback) => {
@@ -50,24 +55,39 @@ const corsOptions = {
     if (!origin) {
       return callback(null, true);
     }
-    if (allowedOrigins.includes(origin)) {
+    const normalized = String(origin).trim().replace(/\/+$/, '');
+    if (allowedOrigins.includes(normalized)) {
       return callback(null, true);
     }
-    // In development mode, also allow any local port on localhost or 127.0.0.1
-    if (!env.isProduction && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    // In development mode, also allow any local port on localhost, 127.0.0.1, or IPv6 [::1]
+    if (!env.isProduction && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(normalized)) {
       return callback(null, true);
     }
     return callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Cache-Control',
+    'Pragma',
+    'If-Modified-Since',
+    'X-Client-Platform',
+    'X-Client-Version',
+    'Access-Control-Request-Headers',
+    'Access-Control-Request-Method'
+  ],
   exposedHeaders: ['Content-Disposition', 'Content-Type', 'Content-Length', 'Cross-Origin-Resource-Policy'],
   optionsSuccessStatus: 204
 };
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+app.options('/*', cors(corsOptions));
 
 // 6. Enable JSON body parsing
 app.use(express.json({ limit: '10mb' }));
