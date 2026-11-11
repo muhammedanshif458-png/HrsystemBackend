@@ -325,12 +325,21 @@ class PayrollService {
       const isWorkingDay = workingDaysOfWeek.includes(dayOfWeek) && !holidaysList.includes(dKey);
       if (!isWorkingDay) continue;
 
-      totalApprovedLeaveDays++;
-
       if (conflictDateKeys.has(dKey)) {
-        // Only count if resolved as leave
         const conflict = conflictsList.find(c => c.date === dKey);
+
+        // If conflict is resolved as PRESENT:
+        // - Counted under attendance (presentDays)
+        // - Excluded from approved leave count (removed from remaining leaves)
+        // - Must NOT consume paid leave allowance
+        // - Must NOT be counted as a separate leave day
+        if (conflict && conflict.status === 'RESOLVED' && conflict.resolution?.decision === 'PRESENT') {
+          continue;
+        }
+
+        // Only count towards paid/unpaid leave breakdown if resolved as leave
         if (conflict && conflict.status === 'RESOLVED') {
+          totalApprovedLeaveDays++;
           if (conflict.resolution?.decision === 'PAID_LEAVE') {
             eligiblePaidLeaveDaysCount++;
             if (eligiblePaidLeaveDaysCount <= paidLeaveAllowance) {
@@ -341,9 +350,16 @@ class PayrollService {
           } else if (conflict.resolution?.decision === 'UNPAID_LEAVE') {
             approvedUnpaidLeaveDays++;
           }
+          continue;
         }
+
+        // Unresolved conflicts: excluded from payable leave breakdown until resolved by HR,
+        // but counted in totalApprovedLeaveDays as an approved leave request pending resolution
+        totalApprovedLeaveDays++;
         continue;
       }
+
+      totalApprovedLeaveDays++;
 
       if ((leaveRecord.leaveType || '').toUpperCase() === 'UNPAID') {
         approvedUnpaidLeaveDays++;

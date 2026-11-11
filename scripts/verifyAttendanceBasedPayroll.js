@@ -578,6 +578,7 @@ async function runTests() {
   assert(dPostResolve.unresolvedConflictCount === 0, 'unresolvedConflictCount is now 0');
   assert(dPostResolve.hasUnresolvedConflicts === false, 'hasUnresolvedConflicts is now false');
   assert(dPostResolve.presentDays === 1, 'Nov 6 now credited as 1 present day per HR resolution');
+  assert(dPostResolve.approvedLeaves === 0, 'Nov 6 leave removed from approvedLeaves count when resolved as PRESENT');
   assert(dPostResolve.payableDays === 2, 'payableDays = 2 (1 present + 1 holiday)');
   assert(dPostResolve.netSalary === 6000, 'Net salary updated to ₹6,000');
 
@@ -628,8 +629,142 @@ async function runTests() {
   // empZero has a December leave, check that it did not contaminate November:
   assert(dZero.approvedLeaves === 0, 'December leave does not appear in November approvedLeaves count');
 
+  console.log('\n--- TEST 16: Multi-Conflict Reconciliation (PRESENT, PAID_LEAVE, UNPAID_LEAVE) ---');
+  // Replicating Rahul K scenario:
+  // 1 clean attendance day (Nov 5)
+  // 3 conflicting dates (Nov 6, Nov 9, Nov 10) with both attendance and approved sick leave
+  const userMulti = await User.create({ firstName: 'RahulTest', lastName: 'Multi', email: 'rahultest@example.com', password: 'password123', role: 'STAFF', isActive: true });
+  const empMulti = await Employee.create({
+    employeeId: 'EMP_RAHUL_TEST',
+    user: userMulti._id,
+    firstName: 'RahulTest',
+    lastName: 'Multi',
+    email: 'rahultest@example.com',
+    department: 'Tech',
+    designation: 'Software Engineer',
+    salary: 22000,
+    paidLeaveAllowance: 1,
+    status: 'ACTIVE'
+  });
+
+  // Nov 5: Clean attendance (Office, PRESENT)
+  await Attendance.create({
+    employee: empMulti._id,
+    date: new Date('2026-11-05T00:00:00.000Z'),
+    status: 'PRESENT',
+    workMode: 'Office'
+  });
+
+  // Nov 6: Attendance + Approved Leave
+  await Attendance.create({
+    employee: empMulti._id,
+    date: new Date('2026-11-06T00:00:00.000Z'),
+    status: 'PRESENT',
+    workMode: 'Office'
+  });
+  await Leave.create({
+    employee: empMulti._id,
+    leaveType: 'SICK',
+    startDate: new Date('2026-11-06T00:00:00.000Z'),
+    endDate: new Date('2026-11-06T00:00:00.000Z'),
+    reason: 'Vomiting',
+    status: 'APPROVED'
+  });
+
+  // Nov 9: Attendance + Approved Leave
+  await Attendance.create({
+    employee: empMulti._id,
+    date: new Date('2026-11-09T00:00:00.000Z'),
+    status: 'PRESENT',
+    workMode: 'Office'
+  });
+  await Leave.create({
+    employee: empMulti._id,
+    leaveType: 'SICK',
+    startDate: new Date('2026-11-09T00:00:00.000Z'),
+    endDate: new Date('2026-11-09T00:00:00.000Z'),
+    reason: 'Vomiting',
+    status: 'APPROVED'
+  });
+
+  // Nov 10: Attendance + Approved Leave
+  await Attendance.create({
+    employee: empMulti._id,
+    date: new Date('2026-11-10T00:00:00.000Z'),
+    status: 'PRESENT',
+    workMode: 'Office'
+  });
+  await Leave.create({
+    employee: empMulti._id,
+    leaveType: 'SICK',
+    startDate: new Date('2026-11-10T00:00:00.000Z'),
+    endDate: new Date('2026-11-10T00:00:00.000Z'),
+    reason: 'Family emergency',
+    status: 'APPROVED'
+  });
+
+  // Step 1: Initial payroll check - 3 unresolved conflicts
+  const resMultiPre = await request(`/api/hr/payroll/employees/${empMulti._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  assert(resMultiPre.status === 200, 'Initial payroll calculation for multi-conflict returns 200');
+  const dMultiPre = resMultiPre.body.data;
+  assert(dMultiPre.unresolvedConflictCount === 3, 'Pre-resolution: 3 unresolved conflicts detected');
+  assert(dMultiPre.hasUnresolvedConflicts === true, 'Pre-resolution: hasUnresolvedConflicts is true');
+  assert(dMultiPre.presentDays === 1, 'Pre-resolution: Only Nov 5 clean attendance counted (presentDays = 1)');
+  assert(dMultiPre.approvedLeaves === 3, 'Pre-resolution: All 3 approved leave requests recorded');
+  assert(dMultiPre.approvedPaidLeaveDays === 0, 'Pre-resolution: Conflicted leaves do not consume paid allowance');
+  assert(dMultiPre.approvedUnpaidLeaveDays === 0, 'Pre-resolution: Conflicted leaves do not count as unpaid yet');
+
+  // Step 2: HR resolves all 3 conflicts:
+  // Nov 6 -> PRESENT
+  // Nov 9 -> PAID_LEAVE
+  // Nov 10 -> UNPAID_LEAVE
+  const conflictNov6 = dMultiPre.conflicts.find(c => c.date === '2026-11-06');
+  const conflictNov9 = dMultiPre.conflicts.find(c => c.date === '2026-11-09');
+  const conflictNov10 = dMultiPre.conflicts.find(c => c.date === '2026-11-10');
+
+  const resRes6 = await request(`/api/hr/payroll/conflicts/${conflictNov6.conflictId}/resolve`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${hrToken}` },
+    body: { decision: 'PRESENT', reason: 'Physically present and worked' }
+  });
+  assert(resRes6.status === 200, 'Conflict Nov 6 resolved as PRESENT');
+
+  const resRes9 = await request(`/api/hr/payroll/conflicts/${conflictNov9.conflictId}/resolve`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${hrToken}` },
+    body: { decision: 'PAID_LEAVE', reason: 'Approved paid medical leave' }
+  });
+  assert(resRes9.status === 200, 'Conflict Nov 9 resolved as PAID_LEAVE');
+
+  const resRes10 = await request(`/api/hr/payroll/conflicts/${conflictNov10.conflictId}/resolve`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${hrToken}` },
+    body: { decision: 'UNPAID_LEAVE', reason: 'Approved unpaid leave' }
+  });
+  assert(resRes10.status === 200, 'Conflict Nov 10 resolved as UNPAID_LEAVE');
+
+  // Step 3: Post-resolution payroll recalculation
+  const resMultiPost = await request(`/api/hr/payroll/employees/${empMulti._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  const dMultiPost = resMultiPost.body.data;
+  assert(dMultiPost.unresolvedConflictCount === 0, 'Post-resolution: unresolvedConflictCount is 0');
+  assert(dMultiPost.hasUnresolvedConflicts === false, 'Post-resolution: hasUnresolvedConflicts is false');
+  assert(dMultiPost.presentDays === 2, 'Post-resolution: presentDays = 2 (1 clean Nov 5 + 1 resolved PRESENT on Nov 6)');
+  assert(dMultiPost.approvedLeaves === 2, 'Post-resolution: Remaining approvedLeaves = 2 (Nov 6 removed; Nov 9 + Nov 10 remain)');
+  assert(dMultiPost.approvedPaidLeaveDays === 1, 'Post-resolution: approvedPaidLeaveDays = 1 (Nov 9 consumed 1-day allowance)');
+  assert(dMultiPost.approvedUnpaidLeaveDays === 1, 'Post-resolution: approvedUnpaidLeaveDays = 1 (Nov 10 unpaid)');
+  assert(dMultiPost.paidLeaveDays === 1, 'Post-resolution: paidLeaveDays = 1');
+  assert(dMultiPost.unpaidLeaveDays === 1, 'Post-resolution: unpaidLeaveDays = 1');
+  assert(dMultiPost.payableDays === 4, 'Post-resolution: payableDays = 4 (2 present + 1 paid leave + 1 holiday)');
+  assert(dMultiPost.dailySalary === 1100, 'Post-resolution: dailySalary = ₹1,100 (22000 / 20)');
+  assert(dMultiPost.netSalary === 4400, 'Post-resolution: netSalary = ₹4,400 (4 payable * 1100)');
+  assert(dMultiPost.deductions === 17600, 'Post-resolution: deductions = ₹17,600');
+
   console.log('\n================================================================');
-  console.log('   ALL 15 ATTENDANCE-BASED PAYROLL VERIFICATIONS PASSED!       ');
+  console.log('   ALL 16 ATTENDANCE-BASED PAYROLL VERIFICATIONS PASSED!       ');
   console.log('================================================================\n');
 
   await mongoose.disconnect();
