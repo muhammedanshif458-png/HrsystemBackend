@@ -12,6 +12,7 @@
     "test": "npm run test:attendance && node scripts/verifySystem.js && node scripts/verifyStaffLoginTracking.js && node scripts/verifyStaffLoginLocationPolicy.js && node scripts/verifyDepartmentCountsAndLeadership.js && node scripts/verifyHrDashboardWfhMetric.js && node scripts/verifyStaffAttendanceHistory.js && node scripts/verifySickMedicalLeave.js && node scripts/verifyStaffLeaveStatusAndHistory.js && node scripts/verifyAccountDeactivatedLoginIssue.js && node scripts/verifySuperAdminRestoration.js && node scripts/verifyHrDashboardConnection.js && node scripts/verifyAttendanceBasedPayroll.js && node scripts/verifyPayrollBatchPersistence.js",
     "test:payroll": "node scripts/verifyAttendanceBasedPayroll.js",
     "test:payroll-batches": "node scripts/verifyPayrollBatchPersistence.js",
+    "test:salary-payments": "node scripts/verifySalaryPayments.js",
     "test:hr-dashboard-conn": "node scripts/verifyHrDashboardConnection.js",
     "test:restore-superadmin": "node scripts/verifySuperAdminRestoration.js",
     "test:account-status": "node scripts/verifyAccountDeactivatedLoginIssue.js",

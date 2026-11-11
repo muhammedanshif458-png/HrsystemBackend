@@ -91,6 +91,13 @@ router.get('/payroll/conflicts', payrollController.getConflicts);
 router.post('/payroll/conflicts/:conflictId/resolve', payrollController.resolveConflict);
 router.get('/payroll/employees/:employeeId', payrollController.getEmployeePayrollById);
 
+// Employee-wise salary payment tracking (separate from legacy batch payment status)
+router.get('/payroll/payments', payrollController.getSalaryPayments);
+router.get('/payroll/payments/summary', payrollController.getSalaryPaymentSummary);
+router.get('/payroll/payments/history', payrollController.getSalaryPaymentHistory);
+router.post('/payroll/payments/:paymentId/mark-paid', payrollController.markSalaryPaymentPaid);
+router.get('/payroll/payments/:paymentId', payrollController.getSalaryPayment);
+
 // Payroll Batches, Finalization & Payslip Endpoints
 router.post('/payroll/batches', payrollController.createDraftBatch);
 router.post('/payroll/batches/draft', payrollController.createDraftBatch);

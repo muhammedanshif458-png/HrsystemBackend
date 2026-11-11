@@ -1,7 +1,52 @@
 const payrollService = require('../services/payrollService');
+const salaryPaymentService = require('../services/salaryPaymentService');
 const { sendSuccess } = require('../utils/response');
 
 class PayrollController {
+  /** GET /api/hr/payroll/payments?month=&year= */
+  async getSalaryPayments(req, res, next) {
+    try {
+      const now = new Date();
+      const month = req.query.month || now.getMonth() + 1;
+      const year = req.query.year || now.getFullYear();
+      const result = await salaryPaymentService.list(year, month, req.query);
+      return sendSuccess(res, 'Salary payments retrieved successfully', result.payments, 200, { pagination: result.pagination, summary: result.summary });
+    } catch (err) { next(err); }
+  }
+
+  /** GET /api/hr/payroll/payments/summary?month=&year= */
+  async getSalaryPaymentSummary(req, res, next) {
+    try {
+      const now = new Date();
+      const summary = await salaryPaymentService.getSummary(req.query.year || now.getFullYear(), req.query.month || now.getMonth() + 1, req.query);
+      return sendSuccess(res, 'Salary payment summary retrieved successfully', summary);
+    } catch (err) { next(err); }
+  }
+
+  /** GET /api/hr/payroll/payments/history */
+  async getSalaryPaymentHistory(req, res, next) {
+    try {
+      const result = await salaryPaymentService.getHistory(req.query);
+      return sendSuccess(res, 'Salary payment history retrieved successfully', result.payments, 200, result.pagination);
+    } catch (err) { next(err); }
+  }
+
+  /** GET /api/hr/payroll/payments/:paymentId */
+  async getSalaryPayment(req, res, next) {
+    try {
+      const payment = await salaryPaymentService.getPayment(req.params.paymentId);
+      return sendSuccess(res, 'Salary payment details retrieved successfully', payment);
+    } catch (err) { next(err); }
+  }
+
+  /** POST /api/hr/payroll/payments/:paymentId/mark-paid */
+  async markSalaryPaymentPaid(req, res, next) {
+    try {
+      const payment = await salaryPaymentService.markPaid(req.params.paymentId, req.body, req.user);
+      return sendSuccess(res, 'Salary payment marked as paid successfully', payment);
+    } catch (err) { next(err); }
+  }
+
   /**
    * GET /api/hr/payroll/summary?month=MM&year=YYYY&department=xxx
    */
