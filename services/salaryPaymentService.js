@@ -86,7 +86,6 @@ class SalaryPaymentService {
       payments = payments.filter(item => `${item.employeeId} ${item.employeeName}`.toLowerCase().includes(search));
     }
     if (filters.employeeId) payments = payments.filter(item => item.employeeId.toLowerCase() === String(filters.employeeId).toLowerCase());
-    if (filters.status && filters.status !== 'all') payments = payments.filter(item => item.status === String(filters.status).toUpperCase());
     payments.sort((a, b) => a.department.localeCompare(b.department) || a.employeeName.localeCompare(b.employeeName));
     return payments;
   }
@@ -99,11 +98,14 @@ class SalaryPaymentService {
   }
 
   async list(year, month, filters = {}) {
-    const payments = await this.getPayments(year, month, filters);
+    const matchingPayments = await this.getPayments(year, month, filters);
+    const payments = filters.status && filters.status !== 'all'
+      ? matchingPayments.filter(item => item.status === String(filters.status).toUpperCase())
+      : matchingPayments;
     const page = Math.max(1, Number.parseInt(filters.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, Number.parseInt(filters.limit, 10) || 50));
     const start = (page - 1) * limit;
-    return { payments: payments.slice(start, start + limit), pagination: { page, limit, total: payments.length, totalPages: Math.ceil(payments.length / limit) || 1 }, summary: this.summarize(payments, Number(year), Number(month)) };
+    return { payments: payments.slice(start, start + limit), pagination: { page, limit, total: payments.length, totalPages: Math.ceil(payments.length / limit) || 1 }, summary: this.summarize(matchingPayments, Number(year), Number(month)) };
   }
 
   async getSummary(year, month, filters = {}) {
