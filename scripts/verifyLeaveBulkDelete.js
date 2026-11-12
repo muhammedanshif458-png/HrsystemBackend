@@ -578,6 +578,28 @@ async function run() {
     assert(reportsRes.status === 200, 'GET /api/hr/reports/leaves returns 200 OK');
     const statusSummary = reportsRes.body.data.statusSummary || [];
 
+    const overlapReports = await request('/api/hr/reports/leaves?startDate=2026-11-02&endDate=2026-11-02', {
+      headers: { Authorization: `Bearer ${hrToken}` }
+    });
+    const overlapDetails = await request('/api/hr/leaves?startDate=2026-11-02&endDate=2026-11-02&page=1&limit=1', {
+      headers: { Authorization: `Bearer ${hrToken}` }
+    });
+    const overlapPendingCount = overlapReports.body.data.statusSummary.find((item) => item._id === 'PENDING')?.count || 0;
+    const overlapSummaryTotal = overlapReports.body.data.statusSummary.reduce((sum, item) => sum + item.count, 0);
+    assert(overlapDetails.body.pagination.total === overlapSummaryTotal, 'inclusive date summary equals detail total across a one-row page');
+    assert(overlapPendingCount >= 1, 'leave report uses the same inclusive overlapping range semantics');
+    assert(!('document' in overlapDetails.body.data[0]) && !('email' in overlapDetails.body.data[0].employee), 'HR leave list omits document metadata and employee email');
+    const combinedQuery = '?department=tech&startDate=2026-11-02&endDate=2026-11-02&status=pending&leaveType=casual';
+    const combinedReport = await request(`/api/hr/reports/leaves${combinedQuery}`, { headers: { Authorization: `Bearer ${hrToken}` } });
+    const combinedDetails = await request(`/api/hr/leaves${combinedQuery}&page=1&limit=1`, { headers: { Authorization: `Bearer ${hrToken}` } });
+    const combinedTotal = combinedReport.body.data.statusSummary.reduce((sum, item) => sum + item.count, 0);
+    assert(combinedTotal === 1 && combinedDetails.body.pagination.total === combinedTotal, 'combined case-insensitive department/date/status/type filters agree with paginated total');
+    assert(combinedDetails.body.data.every((leave) => leave.employee.department === 'Tech'), 'leave department filter matches actual employee department exactly');
+    const emptyDepartment = await request('/api/hr/leaves?department=missing-department', { headers: { Authorization: `Bearer ${hrToken}` } });
+    const emptyReport = await request('/api/hr/reports/leaves?department=missing-department', { headers: { Authorization: `Bearer ${hrToken}` } });
+    assert(emptyDepartment.body.pagination.total === 0 && emptyReport.body.data.statusSummary.length === 0, 'unknown leave department returns consistent empty results');
+    assert((await request(`/api/hr/reports/leaves${combinedQuery}`, { headers: { Authorization: `Bearer ${staffToken}` } })).status === 403, 'leave report preserves HR/SUPER_ADMIN authorization');
+
     const rejectedSummaryItem = statusSummary.find(s => s._id === 'REJECTED');
     assert(!rejectedSummaryItem || rejectedSummaryItem.count === 0, 'Leave report confirms 0 REJECTED records');
 

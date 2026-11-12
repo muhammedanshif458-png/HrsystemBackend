@@ -138,6 +138,7 @@ const run = async () => {
     assert.strictEqual(unconfigured.scheduleConfigured, false, 'missing schedule is recorded as unconfigured');
     assert.strictEqual(unconfigured.late, false, 'missing schedule does not infer late');
     assert.strictEqual(await Attendance.countDocuments({ employee: staffA[4].employee._id }), 0, 'employee without check-in has no late record');
+    await Attendance.create({ employee: staffA[4].employee._id, date: new Date(`${today}T00:00:00.000Z`), status: 'ABSENT' });
 
     const boundary = new Date('2026-01-01T00:30:00.000Z');
     const boundaryEmployee = await createIdentity('STAFF', 'Boundary', 'Boundary Department');
@@ -155,6 +156,24 @@ const run = async () => {
     const alphaLate = await request(server, 'GET', '/api/hr/attendance?department=Alpha%20Department&status=LATE', hr.token);
     assert.strictEqual(alphaLate.body.data.length, 1, 'department filter returns Alpha late row');
     assert(alphaLate.body.data[0].employee.department === 'Alpha Department');
+    const alphaReport = await request(server, 'GET', `/api/hr/reports/attendance?startDate=${today}&endDate=${today}&department=Alpha%20Department`, hr.token);
+    const alphaLatePage = await request(server, 'GET', `/api/hr/attendance?department=Alpha%20Department&status=LATE&startDate=${today}&endDate=${today}&page=1&limit=1`, hr.token);
+    assert.strictEqual(alphaReport.status, 200, 'attendance report accepts the HR authenticated role');
+    assert.strictEqual(alphaLatePage.body.pagination.total, alphaReport.body.data.lateArrivals, 'department/date late summary equals detail total regardless of page size');
+    assert.strictEqual((await request(server, 'GET', '/api/hr/reports/attendance')).status, 401, 'attendance report requires JWT authentication');
+    assert.strictEqual((await request(server, 'GET', '/api/hr/reports/attendance', staffA[0].token)).status, 403, 'attendance report rejects STAFF role');
+    const todayAttendance = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'PRESENT', limit: 1 });
+    const todayReport = await hrService.getAttendanceReports({ startDate: today, endDate: today, department: 'Alpha Department' });
+    const onTimeDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'ON_TIME', limit: 1 });
+    assert.strictEqual(onTimeDetails.pagination.total, todayReport.onTimeArrivals, 'on-time summary excludes missing schedule/check-in cases and matches details');
+    const presentCount = todayReport.statusSummary.find((entry) => entry._id === 'PRESENT')?.count || 0;
+    assert.strictEqual(todayAttendance.pagination.total, presentCount, 'present summary and department/date details share day boundaries');
+    const absentDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'ABSENT', page: 1, limit: 1 });
+    assert.strictEqual(todayReport.totalAbsent, 1, 'attendance report exposes stored ABSENT rows without inferring missing attendance');
+    assert.strictEqual(absentDetails.pagination.total, todayReport.totalAbsent, 'absent summary equals filtered detail total before pagination');
+    assert.strictEqual(absentDetails.attendance.length, 1, 'absent list returns the stored absent row');
+    const emptyAttendance = await hrService.getAttendance({ startDate: today, endDate: today, department: 'No Such Department', status: 'PRESENT' });
+    assert.strictEqual(emptyAttendance.pagination.total, 0, 'attendance department filter handles empty matches');
     const betaLate = await request(server, 'GET', '/api/hr/attendance?department=Beta%20Department&status=LATE', hr.token);
     assert.strictEqual(betaLate.body.data.length, 1, 'different department threshold classifies Beta independently');
     const techLate = await request(server, 'GET', '/api/hr/attendance?department=Tech&status=LATE', hr.token);

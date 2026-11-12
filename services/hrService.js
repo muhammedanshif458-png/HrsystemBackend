@@ -18,6 +18,43 @@ const {
 const { AppError } = require('../middleware/errorMiddleware');
 const { normalizeLeaveType, enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 
+// Stored late flags are authoritative business classifications. A record must
+// have a real check-in; missing check-ins are never counted as late.
+const isLateAttendance = (row) => Boolean(row?.checkIn && (
+  row.late === true || row.isLate === true || row.status === 'LATE' || Number(row.minutesLate) > 0
+));
+
+const isValidOnTimeAttendance = (row) => {
+  const schedule = row?.scheduleSnapshot;
+  if (!row?.checkIn || !schedule?.scheduledCheckIn || !schedule?.timezone ||
+      !Number.isFinite(schedule.gracePeriodMinutes) || schedule.gracePeriodMinutes < 0 ||
+      row.scheduleConfigured === false || row.scheduleStatus === 'UNCONFIGURED') return false;
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: schedule.timezone });
+    const result = calculateLateness(new Date(row.checkIn), schedule);
+    return result.scheduleStatus === 'CONFIGURED' && !result.isLate && !isLateAttendance(row);
+  } catch (_) { return false; }
+};
+
+const departmentEmployeeIds = async (department) => {
+  if (!department || !department.trim()) return null;
+  const dept = department.trim();
+  const canonicalKey = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(dept) : dept.toUpperCase();
+  const patterns = [new RegExp(`^${dept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'), new RegExp(`^${canonicalKey}$`, 'i')];
+  if (canonicalKey === 'TECH') patterns.push(/tech/i, /engineering/i);
+  else if (canonicalKey === 'TELECALLING') patterns.push(/tele/i, /calling/i, /client/i);
+  const employees = await Employee.find({ $or: patterns.map((pattern) => ({ department: pattern })) }).select('_id').lean();
+  return employees.map((employee) => employee._id);
+};
+
+const reportDateFilter = (startDate, endDate, field) => {
+  if (!startDate && !endDate) return {};
+  const filter = {};
+  if (startDate) filter.$gte = getDayBounds(startDate).startOfDay;
+  if (endDate) filter.$lte = getDayBounds(endDate).endOfDay;
+  return { [field]: filter };
+};
+
 const getDayBounds = (dateStr = null) => getDayBoundsForKey(dateStr || getDateKey(new Date(), 'Asia/Kolkata'));
 
 class HRService {
@@ -791,24 +828,7 @@ return {
   }
 
   if (department && department.trim() !== '') {
-    const dept = department.trim();
-    const escaped = dept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const canonicalKey = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(dept) : dept.toUpperCase();
-    const patterns = [
-      new RegExp(`^${escaped}$`, 'i'),
-      new RegExp(`^${canonicalKey}$`, 'i')
-    ];
-    if (canonicalKey === 'TECH') {
-      patterns.push(/tech/i, /engineering/i);
-    } else if (canonicalKey === 'TELECALLING') {
-      patterns.push(/tele/i, /calling/i, /client/i);
-    }
-
-    const matchingEmps = await Employee.find({
-      $or: patterns.map(p => ({ department: p }))
-    }).select('_id');
-
-    const empIds = matchingEmps.map(e => e._id);
+    const empIds = await departmentEmployeeIds(department);
     if (filter.employee) {
       if (!empIds.some(id => id.equals(filter.employee))) {
         return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
@@ -848,12 +868,8 @@ return {
     filter.workMode = modeRegex;
   }
 
-  if (status === 'LATE') {
-    filter.late = true;
-    filter.checkIn = { $ne: null };
-  } else if (status) {
-    filter.status = status;
-  }
+  const normalizedStatus = typeof status === 'string' ? status.toUpperCase() : status;
+  if (normalizedStatus && !['LATE', 'ON_TIME'].includes(normalizedStatus)) filter.status = normalizedStatus;
 
   const effectiveStartDate = startDate || date;
   const effectiveEndDate = endDate || date;
@@ -867,28 +883,16 @@ return {
   let rawAttendance;
   let total;
 
-  if (status && status.toUpperCase() === 'LATE') {
-    const lateQuery = {
-      ...filter,
-      checkIn: { $ne: null },
-      $or: [{ late: true }, { isLate: true }, { status: 'LATE' }]
-    };
-    const lateRows = await Attendance.find(lateQuery)
+  if (normalizedStatus === 'LATE' || normalizedStatus === 'ON_TIME') {
+    const candidates = await Attendance.find({ ...filter, checkIn: { $ne: null } })
       .populate('employee', 'employeeId firstName lastName department designation status workMode')
-      .sort({ date: -1, createdAt: -1 })
-      .lean();
-
-    // If no explicit date range was supplied, restrict to current workday per schedule timezone
-    const currentWorkdayRows = (!effectiveStartDate && !effectiveEndDate)
-      ? lateRows.filter(row => isAttendanceForCurrentWorkday(row))
-      : lateRows;
-
-    total = currentWorkdayRows.length;
-    rawAttendance = currentWorkdayRows.slice(skip, skip + limit);
+      .sort({ date: -1, createdAt: -1 }).lean();
+    const matchingRows = candidates.filter((row) => normalizedStatus === 'LATE' ? isLateAttendance(row) : isValidOnTimeAttendance(row));
+    const rows = (!effectiveStartDate && !effectiveEndDate && normalizedStatus === 'LATE')
+      ? matchingRows.filter((row) => isAttendanceForCurrentWorkday(row)) : matchingRows;
+    total = rows.length;
+    rawAttendance = rows.slice(skip, skip + limit);
   } else {
-    if (status) {
-      filter.status = status.toUpperCase();
-    }
     [rawAttendance, total] = await Promise.all([
       Attendance.find(filter)
         .populate('employee', 'employeeId firstName lastName department designation status workMode')
@@ -902,7 +906,7 @@ return {
 
     const attendance = await Promise.all(
       rawAttendance.map(async (rec) => {
-        const isCurrent = isAttendanceForCurrentWorkday(rec);
+        const isCurrent = isAttendanceForCurrentWorkday(rec) && !['LATE', 'ON_TIME'].includes(normalizedStatus);
         let snapshot = rec.scheduleSnapshot;
         let effSched = null;
 
@@ -932,7 +936,9 @@ return {
           }
         }
 
-        let isLateRec = Boolean(rec.late || rec.isLate || rec.status === 'LATE');
+        let isLateRec = normalizedStatus === 'LATE'
+          ? isLateAttendance(rec)
+          : Boolean(rec.late || rec.isLate || rec.status === 'LATE' || Number(rec.minutesLate) > 0);
         let minutesLate = Number(rec.minutesLate) || 0;
 
         if (isCurrent && rec.checkIn && snapshot?.scheduledCheckIn) {
@@ -1061,7 +1067,7 @@ return {
   /**
    * Get leaves for HR
    */
-  async getLeaves({ page = 1, limit = 20, employeeId, status, leaveType, startDate, endDate }) {
+  async getLeaves({ page = 1, limit = 20, employeeId, status, leaveType, startDate, endDate, department }) {
     page = Math.max(1, parseInt(page, 10));
     limit = Math.max(1, Math.min(100, parseInt(limit, 10)));
     const skip = (page - 1) * limit;
@@ -1083,6 +1089,18 @@ return {
       }
     }
 
+    if (department && department.trim()) {
+      const exactDepartment = new RegExp(`^${department.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      const employees = await Employee.find({ department: exactDepartment }).select('_id').lean();
+      const departmentIds = employees.map((employee) => employee._id);
+      if (!departmentIds.length) return { leaves: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+      const existingEmployeeFilter = filter.employee;
+      if (existingEmployeeFilter && !departmentIds.some((id) => id.equals(existingEmployeeFilter))) {
+        return { leaves: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+      }
+      filter.employee = existingEmployeeFilter || { $in: departmentIds };
+    }
+
     if (status && typeof status === 'string' && status.trim().toLowerCase() !== 'all') {
       filter.status = status.trim().toUpperCase();
     }
@@ -1090,22 +1108,25 @@ return {
       filter.leaveType = normalizeLeaveType(leaveType);
     }
 
+    // Inclusive overlap: a request intersects [startDate, endDate] when its
+    // end is on/after the range start and its start is on/before range end.
     if (startDate || endDate) {
-      if (startDate && endDate) {
-        filter.startDate = { $gte: new Date(startDate) };
-        filter.endDate = { $lte: new Date(endDate) };
-      } else if (startDate) {
-        filter.startDate = { $gte: new Date(startDate) };
-      } else if (endDate) {
-        filter.endDate = { $lte: new Date(endDate) };
+      filter.startDate = {};
+      filter.endDate = {};
+      if (startDate) {
+        filter.endDate.$gte = getDayBounds(startDate).startOfDay;
       }
+      if (endDate) {
+        filter.startDate.$lte = getDayBounds(endDate).endOfDay;
+      }
+      if (!Object.keys(filter.startDate).length) delete filter.startDate;
+      if (!Object.keys(filter.endDate).length) delete filter.endDate;
     }
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
-        .populate('employee', 'employeeId firstName lastName department designation email')
-        .populate('approvedBy', 'firstName lastName email role')
-        .populate('document')
+        .populate('employee', 'employeeId firstName lastName department')
+        .populate('approvedBy', 'firstName lastName role')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1116,7 +1137,10 @@ return {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      leaves: enrichLeaveResponses(leaves, 'hr'),
+      leaves: enrichLeaveResponses(leaves, 'hr').map((leave) => {
+        const { document, documentUrl, documentName, attachment, medicalProofUrl, medicalProofFileName, medicalProofFileType, documentId, hasMedicalProof, ...safeLeave } = leave;
+        return safeLeave;
+      }),
       pagination: { page, limit, total, totalPages }
     };
   }
@@ -1403,17 +1427,9 @@ return {
    * HR Attendance Reports
    */
   async getAttendanceReports({ startDate, endDate, department }) {
-    const matchFilter = {};
-
-    if (startDate || endDate) {
-      matchFilter.date = {};
-      if (startDate) matchFilter.date.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        matchFilter.date.$lte = end;
-      }
-    }
+    const matchFilter = reportDateFilter(startDate, endDate, 'date');
+    const matchingEmployeeIds = await departmentEmployeeIds(department);
+    if (matchingEmployeeIds) matchFilter.employee = { $in: matchingEmployeeIds };
 
     const summaryPipeline = [
       { $match: matchFilter },
@@ -1437,7 +1453,7 @@ return {
         }
       },
       { $unwind: '$employeeDoc' },
-      ...(department ? [{ $match: { 'employeeDoc.department': new RegExp(`^${department}$`, 'i') } }] : []),
+      ...(matchingEmployeeIds ? [{ $match: { 'employeeDoc._id': { $in: matchingEmployeeIds } } }] : []),
       {
         $group: {
           _id: {
@@ -1459,31 +1475,39 @@ return {
       }
     ];
 
-    const [statusSummary, departmentSummary] = await Promise.all([
+    const [statusSummary, departmentSummary, lateRows, onTimeRows] = await Promise.all([
       Attendance.aggregate(summaryPipeline),
-      Attendance.aggregate(departmentPipeline)
+      Attendance.aggregate(departmentPipeline),
+      Attendance.find({ ...matchFilter, checkIn: { $ne: null } }).select('checkIn late isLate status minutesLate').lean(),
+      Attendance.find({ ...matchFilter, checkIn: { $ne: null } }).select('checkIn late isLate status minutesLate scheduleConfigured scheduleStatus scheduleSnapshot').lean()
     ]);
 
+    const scopedLateRows = (!startDate && !endDate)
+      ? lateRows.filter((row) => isAttendanceForCurrentWorkday(row)) : lateRows;
     return {
       statusSummary,
-      departmentSummary
+      departmentSummary,
+      lateArrivals: scopedLateRows.filter(isLateAttendance).length,
+      onTimeArrivals: onTimeRows.filter(isValidOnTimeAttendance).length,
+      totalAbsent: statusSummary.find((item) => item._id === 'ABSENT')?.count || 0
     };
   }
 
   /**
    * HR Leave Reports
    */
-  async getLeaveReports({ startDate, endDate }) {
+  async getLeaveReports({ startDate, endDate, department, status, leaveType }) {
     const matchFilter = {};
-
     if (startDate || endDate) {
-      matchFilter.startDate = {};
-      if (startDate) matchFilter.startDate.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        matchFilter.startDate.$lte = end;
-      }
+      if (endDate) matchFilter.startDate = { $lte: getDayBounds(endDate).endOfDay };
+      if (startDate) matchFilter.endDate = { $gte: getDayBounds(startDate).startOfDay };
+    }
+    if (status && String(status).trim().toLowerCase() !== 'all') matchFilter.status = String(status).trim().toUpperCase();
+    if (leaveType && String(leaveType).trim().toLowerCase() !== 'all') matchFilter.leaveType = normalizeLeaveType(leaveType);
+    if (department && department.trim()) {
+      const exactDepartment = new RegExp(`^${department.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      const employees = await Employee.find({ department: exactDepartment }).select('_id').lean();
+      matchFilter.employee = { $in: employees.map((employee) => employee._id) };
     }
 
     const [statusCounts, typeCounts] = await Promise.all([
