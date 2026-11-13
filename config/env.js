@@ -9,6 +9,7 @@ const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   isProduction: process.env.NODE_ENV === 'production',
   mongodbUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/hr_management',
+  birthdayTimeZone: process.env.BIRTHDAY_TIMEZONE || 'Asia/Kolkata',
   
   jwt: {
     secret: process.env.JWT_SECRET || 'default_jwt_secret_change_in_production_min_32_chars',

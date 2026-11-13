@@ -23,6 +23,7 @@
     "test:department-schedules": "node scripts/verifyDepartmentSchedulesAndLateness.js",
     "test:live-endpoints": "node scripts/verifyLiveEndpoints.js",
     "test:birthdays": "node scripts/verifyBirthdays.js",
+    "test:birthdays:today": "node scripts/verifyBirthdayToday.js",
     "test:staff-update": "node scripts/verifyStaffUpdateLive.js",
     "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js",
     "test:lifecycle": "node scripts/verifyEmployeeLifecycle.js",

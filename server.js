@@ -19,6 +19,7 @@ const { errorMiddleware } = require('./middleware/errorMiddleware');
 const authRoutes = require('./routes/authRoutes');
 const hrRoutes = require('./routes/hrRoutes');
 const staffRoutes = require('./routes/staffRoutes');
+const birthdayRoutes = require('./routes/birthdayRoutes');
 
 // 3. Initialize Express app
 const app = express();
@@ -126,6 +127,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/hr', hrRoutes);
 app.use('/api/staff', staffRoutes);
+app.use('/api/birthdays', birthdayRoutes);
 
 // 10. Register 404 Not Found middleware
 app.use(notFoundMiddleware);
