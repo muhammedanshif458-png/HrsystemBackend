@@ -128,6 +128,16 @@ class PayrollController {
     }
   }
 
+  /** POST /api/hr/payroll/conflicts/archive-resolved */
+  async archiveResolvedConflicts(req, res, next) {
+    try {
+      const archivedCount = await payrollService.archiveResolvedConflicts(req.user);
+      return sendSuccess(res, 'Resolved payroll conflicts archived successfully', { archivedCount });
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /**
    * POST /api/hr/payroll/conflicts/:conflictId/resolve
    */

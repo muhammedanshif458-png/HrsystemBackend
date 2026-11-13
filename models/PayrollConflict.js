@@ -88,6 +88,15 @@ const payrollConflictSchema = new mongoose.Schema(
       default: 'UNRESOLVED',
       index: true
     },
+    archivedAt: {
+      type: Date,
+      default: null
+    },
+    archivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
     resolution: {
       decision: {
         type: String,

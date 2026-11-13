@@ -537,7 +537,7 @@ class PayrollService {
    * Get list of payroll conflicts for a month
    */
   async getConflicts(year, month, { department, status, employeeId, page = 1, limit = 50 } = {}) {
-    const query = { year, month };
+    const query = { year, month, archivedAt: null };
     if (status && status !== 'all') {
       query.status = status.toUpperCase();
     }
@@ -564,7 +564,7 @@ class PayrollService {
         .limit(limit)
         .lean(),
       PayrollConflict.countDocuments(query),
-      PayrollConflict.countDocuments({ year, month, status: 'UNRESOLVED' })
+      PayrollConflict.countDocuments({ year, month, status: 'UNRESOLVED', archivedAt: null })
     ]);
 
     return {
@@ -577,6 +577,15 @@ class PayrollService {
         unresolvedTotal
       }
     };
+  }
+
+  /** Archive every active resolved conflict without removing its history. */
+  async archiveResolvedConflicts(archivedByUser = null) {
+    const result = await PayrollConflict.updateMany(
+      { status: 'RESOLVED', archivedAt: null },
+      { $set: { archivedAt: new Date(), archivedBy: archivedByUser?._id || null } }
+    );
+    return result.modifiedCount || 0;
   }
 
   /**
