@@ -139,6 +139,18 @@ const run = async () => {
     assert.strictEqual(unconfigured.late, false, 'missing schedule does not infer late');
     assert.strictEqual(await Attendance.countDocuments({ employee: staffA[4].employee._id }), 0, 'employee without check-in has no late record');
     await Attendance.create({ employee: staffA[4].employee._id, date: new Date(`${today}T00:00:00.000Z`), status: 'ABSENT' });
+    await Attendance.updateOne(
+      { employee: staffA[2].employee._id, date: new Date(`${today}T00:00:00.000Z`) },
+      { $set: { status: 'HALF_DAY' } }
+    );
+    const completeForHours = await Attendance.findOne({ employee: staffA[0].employee._id });
+    await Attendance.updateOne({ _id: completeForHours._id }, {
+      $set: { checkOut: new Date(completeForHours.checkIn.getTime() + 8 * 3600000), workingHours: 8, totalBreakMinutes: 0 }
+    });
+    const invalidHours = await Attendance.findOne({ employee: staffA[3].employee._id });
+    await Attendance.updateOne({ _id: invalidHours._id }, {
+      $set: { checkOut: new Date(invalidHours.checkIn.getTime() + 8 * 3600000), workingHours: 99, totalBreakMinutes: 0 }
+    });
 
     const boundary = new Date('2026-01-01T00:30:00.000Z');
     const boundaryEmployee = await createIdentity('STAFF', 'Boundary', 'Boundary Department');
@@ -166,12 +178,19 @@ const run = async () => {
     const todayReport = await hrService.getAttendanceReports({ startDate: today, endDate: today, department: 'Alpha Department' });
     const onTimeDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'ON_TIME', limit: 1 });
     assert.strictEqual(onTimeDetails.pagination.total, todayReport.onTimeArrivals, 'on-time summary excludes missing schedule/check-in cases and matches details');
-    const presentCount = todayReport.statusSummary.find((entry) => entry._id === 'PRESENT')?.count || 0;
-    assert.strictEqual(todayAttendance.pagination.total, presentCount, 'present summary and department/date details share day boundaries');
+    const allAttendanceDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', limit: 1 });
+    assert.strictEqual(allAttendanceDetails.pagination.total, todayReport.totalAttendanceRecords, 'total logged attendance count matches detail total before pagination');
+    assert.strictEqual(todayAttendance.pagination.total, todayReport.presentRecords, 'present summary and department/date details share day boundaries and include half days');
     const absentDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'ABSENT', page: 1, limit: 1 });
     assert.strictEqual(todayReport.totalAbsent, 1, 'attendance report exposes stored ABSENT rows without inferring missing attendance');
     assert.strictEqual(absentDetails.pagination.total, todayReport.totalAbsent, 'absent summary equals filtered detail total before pagination');
     assert.strictEqual(absentDetails.attendance.length, 1, 'absent list returns the stored absent row');
+    const presentDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'PRESENT', page: 1, limit: 1 });
+    assert.strictEqual(presentDetails.pagination.total, todayReport.presentRecords, 'present summary includes HALF_DAY and matches detail total before pagination');
+    assert.strictEqual(presentDetails.attendance.length, 1, 'present pagination is applied after the complete matching total');
+    const workedHoursDetails = await hrService.getAttendance({ startDate: today, endDate: today, department: 'Alpha Department', status: 'WORKED_HOURS', page: 1, limit: 1 });
+    assert.strictEqual(workedHoursDetails.pagination.total, todayReport.workingHoursSampleSize, 'valid working-hours summary sample matches detail total');
+    assert.strictEqual(todayReport.averageWorkingHours, 8, 'average working hours excludes inconsistent stored hours');
     const emptyAttendance = await hrService.getAttendance({ startDate: today, endDate: today, department: 'No Such Department', status: 'PRESENT' });
     assert.strictEqual(emptyAttendance.pagination.total, 0, 'attendance department filter handles empty matches');
     const betaLate = await request(server, 'GET', '/api/hr/attendance?department=Beta%20Department&status=LATE', hr.token);

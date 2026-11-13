@@ -36,6 +36,19 @@ const isValidOnTimeAttendance = (row) => {
   } catch (_) { return false; }
 };
 
+const isValidWorkingHoursRecord = (row) => {
+  const checkIn = new Date(row?.checkIn);
+  const checkOut = new Date(row?.checkOut);
+  const hours = Number(row?.workingHours);
+  const breaks = Number.isFinite(Number(row?.totalBreakMinutes))
+    ? Number(row.totalBreakMinutes)
+    : (Array.isArray(row?.breaks) ? row.breaks.reduce((sum, item) => sum + (Number(item.durationMinutes) || 0), 0) : 0);
+  if (!row?.checkIn || !row?.checkOut || !Number.isFinite(checkIn.getTime()) || !Number.isFinite(checkOut.getTime()) ||
+      checkOut <= checkIn || !Number.isFinite(hours) || hours < 0 || !Number.isFinite(breaks) || breaks < 0) return false;
+  const expectedHours = Math.round(Math.max(0, (checkOut - checkIn) / 3600000 - breaks / 60) * 100) / 100;
+  return Math.abs(hours - expectedHours) <= 0.02;
+};
+
 const departmentEmployeeIds = async (department) => {
   if (!department || !department.trim()) return null;
   const dept = department.trim();
@@ -869,7 +882,8 @@ return {
   }
 
   const normalizedStatus = typeof status === 'string' ? status.toUpperCase() : status;
-  if (normalizedStatus && !['LATE', 'ON_TIME'].includes(normalizedStatus)) filter.status = normalizedStatus;
+  if (normalizedStatus === 'PRESENT') filter.status = { $in: ['PRESENT', 'HALF_DAY'] };
+  else if (normalizedStatus && !['LATE', 'ON_TIME', 'WORKED_HOURS'].includes(normalizedStatus)) filter.status = normalizedStatus;
 
   const effectiveStartDate = startDate || date;
   const effectiveEndDate = endDate || date;
@@ -883,11 +897,17 @@ return {
   let rawAttendance;
   let total;
 
-  if (normalizedStatus === 'LATE' || normalizedStatus === 'ON_TIME') {
-    const candidates = await Attendance.find({ ...filter, checkIn: { $ne: null } })
+  if (normalizedStatus === 'LATE' || normalizedStatus === 'ON_TIME' || normalizedStatus === 'WORKED_HOURS') {
+    const candidates = await Attendance.find(normalizedStatus === 'WORKED_HOURS'
+      ? { ...filter, checkIn: { $ne: null }, checkOut: { $ne: null } }
+      : { ...filter, checkIn: { $ne: null } })
       .populate('employee', 'employeeId firstName lastName department designation status workMode')
       .sort({ date: -1, createdAt: -1 }).lean();
-    const matchingRows = candidates.filter((row) => normalizedStatus === 'LATE' ? isLateAttendance(row) : isValidOnTimeAttendance(row));
+    const matchingRows = candidates.filter((row) => {
+      if (normalizedStatus === 'LATE') return isLateAttendance(row);
+      if (normalizedStatus === 'ON_TIME') return isValidOnTimeAttendance(row);
+      return isValidWorkingHoursRecord(row);
+    });
     const rows = (!effectiveStartDate && !effectiveEndDate && normalizedStatus === 'LATE')
       ? matchingRows.filter((row) => isAttendanceForCurrentWorkday(row)) : matchingRows;
     total = rows.length;
@@ -906,7 +926,7 @@ return {
 
     const attendance = await Promise.all(
       rawAttendance.map(async (rec) => {
-        const isCurrent = isAttendanceForCurrentWorkday(rec) && !['LATE', 'ON_TIME'].includes(normalizedStatus);
+        const isCurrent = isAttendanceForCurrentWorkday(rec) && !['LATE', 'ON_TIME', 'WORKED_HOURS'].includes(normalizedStatus);
         let snapshot = rec.scheduleSnapshot;
         let effSched = null;
 
@@ -1436,8 +1456,7 @@ return {
       {
         $group: {
           _id: '$status',
-          count: { $sum: 1 },
-          avgWorkingHours: { $avg: '$workingHours' }
+          count: { $sum: 1 }
         }
       }
     ];
@@ -1475,21 +1494,37 @@ return {
       }
     ];
 
-    const [statusSummary, departmentSummary, lateRows, onTimeRows] = await Promise.all([
+    const [groupedStatuses, departmentSummary, lateRows, onTimeRows, workingHoursRows] = await Promise.all([
       Attendance.aggregate(summaryPipeline),
       Attendance.aggregate(departmentPipeline),
       Attendance.find({ ...matchFilter, checkIn: { $ne: null } }).select('checkIn late isLate status minutesLate').lean(),
-      Attendance.find({ ...matchFilter, checkIn: { $ne: null } }).select('checkIn late isLate status minutesLate scheduleConfigured scheduleStatus scheduleSnapshot').lean()
+      Attendance.find({ ...matchFilter, checkIn: { $ne: null } }).select('checkIn late isLate status minutesLate scheduleConfigured scheduleStatus scheduleSnapshot').lean(),
+      Attendance.find({ ...matchFilter, checkIn: { $ne: null }, checkOut: { $ne: null } })
+        .select('status checkIn checkOut workingHours totalBreakMinutes breaks').lean()
     ]);
 
     const scopedLateRows = (!startDate && !endDate)
       ? lateRows.filter((row) => isAttendanceForCurrentWorkday(row)) : lateRows;
+    const validHoursRows = workingHoursRows.filter(isValidWorkingHoursRecord);
+    const totalAttendanceRecords = groupedStatuses.reduce((sum, item) => sum + item.count, 0);
+    const countByStatus = new Map(groupedStatuses.map((item) => [item._id, item.count]));
+    const averageFor = (rows) => rows.length
+      ? Math.round(rows.reduce((sum, row) => sum + Number(row.workingHours), 0) / rows.length * 100) / 100
+      : null;
+    const statusSummary = groupedStatuses.map((item) => {
+      const validRows = validHoursRows.filter((row) => row.status === item._id);
+      return { ...item, avgWorkingHours: averageFor(validRows), workingHoursSampleSize: validRows.length };
+    });
     return {
       statusSummary,
       departmentSummary,
+      totalAttendanceRecords,
+      presentRecords: (countByStatus.get('PRESENT') || 0) + (countByStatus.get('HALF_DAY') || 0),
       lateArrivals: scopedLateRows.filter(isLateAttendance).length,
       onTimeArrivals: onTimeRows.filter(isValidOnTimeAttendance).length,
-      totalAbsent: statusSummary.find((item) => item._id === 'ABSENT')?.count || 0
+      totalAbsent: countByStatus.get('ABSENT') || 0,
+      averageWorkingHours: averageFor(validHoursRows),
+      workingHoursSampleSize: validHoursRows.length
     };
   }
 
@@ -1531,9 +1566,24 @@ return {
       ])
     ]);
 
+    const statusCount = (key) => statusCounts.find((item) => item._id === key)?.count || 0;
+    const normalizedTypeCounts = typeCounts.reduce((counts, item) => {
+      const type = normalizeLeaveType(item._id);
+      counts[type] = (counts[type] || 0) + item.count;
+      return counts;
+    }, {});
+    const totalLeaveApplications = statusCounts.reduce((sum, item) => sum + item.count, 0);
+
     return {
       statusSummary: statusCounts,
-      typeSummary: typeCounts
+      typeSummary: typeCounts,
+      totalLeaveApplications,
+      approvedRequests: statusCount('APPROVED'),
+      pendingRequests: statusCount('PENDING'),
+      rejectedRequests: statusCount('REJECTED'),
+      casualLeaves: normalizedTypeCounts.CASUAL || 0,
+      sickMedicalLeaves: (normalizedTypeCounts.SICK || 0) + (normalizedTypeCounts.MEDICAL || 0),
+      earnedAnnualLeaves: (normalizedTypeCounts.ANNUAL || 0) + (normalizedTypeCounts.EARNED || 0)
     };
   }
 

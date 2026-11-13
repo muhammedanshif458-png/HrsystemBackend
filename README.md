@@ -313,16 +313,16 @@ Base URL: `http://localhost:5000/api`
 | `GET` | `/api/hr/employees/:id` | - | Get employee by MongoDB ID or employeeId |
 | `PUT` | `/api/hr/employees/:id` | Update fields | Update employee details |
 | `DELETE` | `/api/hr/employees/:id` | - | Deactivate employee & user account |
-| `GET` | `/api/hr/attendance` | `page`, `limit`, `employeeId`, `department`, `startDate`, `endDate`, `status` (`LATE`, `ON_TIME`, or stored status) | Paginated attendance records |
+| `GET` | `/api/hr/attendance` | `page`, `limit`, `employeeId`, `department`, `startDate`, `endDate`, `status` (`PRESENT`, `ABSENT`, `HALF_DAY`, `LATE`, `ON_TIME`, `WORKED_HOURS`, or stored status) | Paginated attendance records; `PRESENT` includes stored `HALF_DAY` |
 | `GET` | `/api/hr/attendance/:employeeId` | `page`, `limit`, `startDate`, `endDate` | Attendance records for specific employee |
 | `GET` | `/api/hr/leaves` | `page`, `limit`, `employeeId`, `department`, `status`, `leaveType`, `startDate`, `endDate` | Paginated leave requests |
 | `GET` | `/api/hr/leaves/:id` | - | Single leave request detail |
 | `PUT` | `/api/hr/leaves/:id/approve` | - | Approve leave request |
 | `PUT` | `/api/hr/leaves/:id/reject` | `{ "rejectionReason": "..." }` | Reject leave request |
-| `GET` | `/api/hr/reports/attendance`| `startDate`, `endDate`, `department` | `statusSummary`, `departmentSummary`, `lateArrivals`, `onTimeArrivals` |
-| `GET` | `/api/hr/reports/leaves` | `startDate`, `endDate`, `department`, `status`, `leaveType` | Filtered leave status and type breakdowns |
+| `GET` | `/api/hr/reports/attendance`| `startDate`, `endDate`, `department` | Attendance totals, status and department breakdowns, late/on-time counts, validated working-hours average |
+| `GET` | `/api/hr/reports/leaves` | `startDate`, `endDate`, `department`, `status`, `leaveType` | Filtered application/status/type totals including casual, sick/medical, and earned/annual counts |
 
-Attendance date filters use inclusive UTC day boundaries. An unfiltered `status=LATE` detail request and `lateArrivals` report count are scoped to each record's current workday; explicit date filters use that inclusive range. `status=ON_TIME` requires a check-in and saved schedule snapshot with a valid timezone and grace period; incomplete records are excluded. HR leave date filters use inclusive overlap semantics: a leave is included when its end is on or after the requested start and its start is on or before the requested end. Leave department filtering is case-insensitive exact matching against `Employee.department`. Leave report `status` and `leaveType` filters can be combined with department and date filters. Leave list responses omit employee email and document metadata.
+Attendance date filters use inclusive UTC day boundaries. An unfiltered `status=LATE` detail request and `lateArrivals` report count are scoped to each record's current workday; explicit date filters use that inclusive range. `status=ON_TIME` requires a check-in and saved schedule snapshot with a valid timezone and grace period; incomplete records are excluded. `status=WORKED_HOURS` returns only completed records whose stored working hours agree with check-in, check-out, and break duration; averages exclude other records and include a sample size. No WFH metric is provided. HR leave date filters use inclusive overlap semantics: a leave is included when its end is on or after the requested start and its start is on or before the requested end. Leave department filtering is case-insensitive exact matching against `Employee.department`. Leave report `status` and `leaveType` filters can be combined with department and date filters. Leave list responses omit employee email and document metadata.
 
 ### Staff APIs (`/api/staff`) — Requires `STAFF` Role
 
