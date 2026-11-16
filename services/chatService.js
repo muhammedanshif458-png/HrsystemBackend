@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const DepartmentChatMessage = require('../models/DepartmentChatMessage');
 const Employee = require('../models/Employee');
+const DepartmentChatUserState = require('../models/DepartmentChatUserState');
 const { AppError } = require('../middleware/errorMiddleware');
 
 class ChatService {
@@ -51,19 +52,19 @@ class ChatService {
       id,
       _id: id,
       departmentKey: m.departmentKey,
+      conversationType: m.conversationType || 'DEPARTMENT',
       senderId: m.senderId ? m.senderId.toString() : '',
       senderName: m.senderName || '',
       senderRole: m.senderRole || 'STAFF',
       senderUser: m.senderUser ? m.senderUser.toString() : null,
       senderEmployee: m.senderEmployee ? m.senderEmployee.toString() : null,
       receiverId: m.receiverId || '',
-      text: m.text,
-      message: m.text, // alias for Flutter chat message compatibility
+      text: m.deletedForEveryone ? 'This message was deleted' : m.text,
+      message: m.deletedForEveryone ? 'This message was deleted' : m.text,
       timestamp: ts,
       createdAt: created,
       isRead: Boolean(m.isRead),
-      deletedForEveryone: Boolean(m.deletedForEveryone),
-      deletedByIds: (m.deletedByIds || []).map((id) => id.toString())
+      deletedForEveryone: Boolean(m.deletedForEveryone)
     };
 
     if (clientMessageId) {
@@ -73,6 +74,16 @@ class ChatService {
     return formatted;
   }
 
+  async assertDepartmentAccess(deptKey, user) {
+    const normalizedKey = this.normalizeDeptKey(deptKey);
+    if (!['STAFF', 'HR', 'SUPER_ADMIN'].includes(user.role)) throw new AppError('Unauthorized', 403);
+    if (user.role === 'STAFF') {
+      const staffInfo = await this.getStaffAuthorizedDepartment(user);
+      if (normalizedKey !== staffInfo.departmentKey) throw new AppError(`Unauthorized: You can only access the chat for your own department (${staffInfo.departmentKey})`, 403);
+    }
+    return normalizedKey;
+  }
+
   /**
    * Get department messages with pagination and authorization
    */
@@ -80,32 +91,31 @@ class ChatService {
     const normalizedKey = this.normalizeDeptKey(deptKey);
     const userId = user._id.toString();
 
-    // Staff access control: staff can ONLY access their own department
-    if (user.role === 'STAFF') {
-      const staffInfo = await this.getStaffAuthorizedDepartment(user);
-      if (normalizedKey !== staffInfo.departmentKey) {
-        throw new AppError(
-          `Unauthorized: You can only access the chat for your own department (${staffInfo.departmentKey})`,
-          403
-        );
-      }
-    }
+    await this.assertDepartmentAccess(normalizedKey, user);
 
     const parsedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
     const parsedPage = Math.max(1, parseInt(page, 10) || 1);
     const skip = (parsedPage - 1) * parsedLimit;
 
-    // Base query: not deleted for everyone, and not deleted by this user
+    const state = await DepartmentChatUserState.findOne({ userId: user._id, departmentKey: normalizedKey }).lean();
+    // Include globally deleted tombstones but never leak their original content.
     const query = {
+      $or: [{ conversationType: 'DEPARTMENT' }, { conversationType: { $exists: false } }],
       departmentKey: normalizedKey,
-      deletedForEveryone: false,
       deletedByIds: { $ne: userId }
     };
+
+    if (state?.clearedThroughTimestamp && state?.clearedThroughMessageId) {
+      query.$and = [{ $or: [
+        { timestamp: { $gt: state.clearedThroughTimestamp } },
+        { timestamp: state.clearedThroughTimestamp, _id: { $gt: state.clearedThroughMessageId } }
+      ] }];
+    }
 
     if (before) {
       const beforeDate = new Date(before);
       if (!isNaN(beforeDate.getTime())) {
-        query.timestamp = { $lt: beforeDate };
+        query.timestamp = { ...(query.timestamp || {}), $lt: beforeDate };
       }
     }
 
@@ -140,6 +150,78 @@ class ChatService {
   async getStaffDepartmentMessages(user, query = {}) {
     const staffInfo = await this.getStaffAuthorizedDepartment(user);
     return await this.getDepartmentMessages(staffInfo.departmentKey, user, query);
+  }
+
+  async clearDepartmentChat(deptKey, user) {
+    const normalizedKey = await this.assertDepartmentAccess(deptKey, user);
+    const clearedAt = new Date();
+    const latestMessage = await DepartmentChatMessage.findOne({
+      $or: [{ conversationType: 'DEPARTMENT' }, { conversationType: { $exists: false } }],
+      departmentKey: normalizedKey
+    }).sort({ timestamp: -1, _id: -1 }).select('_id timestamp').lean();
+    await DepartmentChatUserState.findOneAndUpdate(
+      { userId: user._id, departmentKey: normalizedKey },
+      { $set: { clearedAt, clearedThroughTimestamp: latestMessage?.timestamp || null, clearedThroughMessageId: latestMessage?._id || null } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    return { message: 'Department chat cleared for current user', departmentKey: normalizedKey, clearedAt: clearedAt.toISOString() };
+  }
+
+  async searchDepartmentMessages(deptKey, user, { q, limit = 50, page = 1 } = {}) {
+    const normalizedKey = await this.assertDepartmentAccess(deptKey, user);
+    const term = typeof q === 'string' ? q.trim() : '';
+    if (!term) throw new AppError('Search query is required', 400);
+    if (term.length > 100) throw new AppError('Search query cannot exceed 100 characters', 400);
+    const parsedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const state = await DepartmentChatUserState.findOne({ userId: user._id, departmentKey: normalizedKey }).lean();
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const query = {
+      $or: [{ conversationType: 'DEPARTMENT' }, { conversationType: { $exists: false } }],
+      departmentKey: normalizedKey,
+      deletedByIds: { $ne: user._id.toString() },
+      deletedForEveryone: false,
+      text: { $regex: escaped, $options: 'i' }
+    };
+    if (state?.clearedThroughTimestamp && state?.clearedThroughMessageId) {
+      query.$and = [{ $or: [
+        { timestamp: { $gt: state.clearedThroughTimestamp } },
+        { timestamp: state.clearedThroughTimestamp, _id: { $gt: state.clearedThroughMessageId } }
+      ] }];
+    }
+    const [rows, total] = await Promise.all([
+      DepartmentChatMessage.find(query).sort({ timestamp: -1 }).skip((parsedPage - 1) * parsedLimit).limit(parsedLimit).lean(),
+      DepartmentChatMessage.countDocuments(query)
+    ]);
+    const totalPages = Math.ceil(total / parsedLimit) || 1;
+    return { messages: rows.reverse().map((m) => this.formatMessage(m)), pagination: { page: parsedPage, limit: parsedLimit, total, totalPages, hasMore: parsedPage < totalPages, departmentKey: normalizedKey, query: term } };
+  }
+
+  async getCompanyMessages(user, { limit = 50, page = 1, before = null } = {}) {
+    if (!['STAFF', 'HR', 'SUPER_ADMIN'].includes(user.role)) throw new AppError('Unauthorized', 403);
+    if (user.role === 'STAFF') await this.getStaffAuthorizedDepartment(user);
+    const parsedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const query = { conversationType: 'COMPANY', deletedForEveryone: false, deletedByIds: { $ne: user._id.toString() } };
+    if (before && !Number.isNaN(new Date(before).getTime())) query.timestamp = { $lt: new Date(before) };
+    const [rows, total] = await Promise.all([
+      DepartmentChatMessage.find(query).sort({ timestamp: -1 }).skip((parsedPage - 1) * parsedLimit).limit(parsedLimit).lean(),
+      DepartmentChatMessage.countDocuments(query)
+    ]);
+    const totalPages = Math.ceil(total / parsedLimit) || 1;
+    return { messages: rows.reverse().map((m) => this.formatMessage(m)), pagination: { page: parsedPage, limit: parsedLimit, total, totalPages, hasMore: parsedPage < totalPages, conversationType: 'COMPANY', conversationId: 'company' } };
+  }
+
+  async sendCompanyMessage(text, user, options = {}) {
+    if (!['STAFF', 'HR', 'SUPER_ADMIN'].includes(user.role)) throw new AppError('Unauthorized', 403);
+    const employee = user.role === 'STAFF' ? (await this.getStaffAuthorizedDepartment(user)).employee : null;
+    const cleanText = typeof text === 'string' ? text.trim() : '';
+    if (!cleanText) throw new AppError('Message text cannot be empty', 400);
+    if (cleanText.length > 2000) throw new AppError('Message text cannot exceed 2000 characters', 400);
+    const message = await DepartmentChatMessage.create({ conversationType: 'COMPANY', departmentKey: 'company', senderId: employee ? employee._id.toString() : user._id.toString(), senderUser: user._id, senderEmployee: employee?._id || null, senderRole: user.role, senderName: employee ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() : `${user.firstName || ''} ${user.lastName || ''}`.trim(), text: cleanText });
+    const formatted = this.formatMessage(message, options.clientMessageId);
+    require('./socketService').emitCompanyNewMessage(formatted);
+    return formatted;
   }
 
   /**
@@ -225,7 +307,7 @@ class ChatService {
   /**
    * Delete message for user (hide from user view)
    */
-  async deleteMessageForMe(messageId, userId) {
+  async deleteMessageForMe(messageId, user) {
     if (!mongoose.Types.ObjectId.isValid(messageId)) {
       throw new AppError('Invalid message ID', 400);
     }
@@ -235,7 +317,12 @@ class ChatService {
       throw new AppError('Message not found', 404);
     }
 
-    const idStr = userId.toString();
+    if (message.conversationType === 'DEPARTMENT' || !message.conversationType) {
+      await this.assertDepartmentAccess(message.departmentKey, user);
+    } else if (message.conversationType !== 'COMPANY') {
+      throw new AppError('Message not found', 404);
+    }
+    const idStr = user._id.toString();
     if (!message.deletedByIds.includes(idStr)) {
       message.deletedByIds.push(idStr);
       await message.save();
@@ -257,6 +344,12 @@ class ChatService {
       throw new AppError('Message not found', 404);
     }
 
+    if (message.conversationType === 'DEPARTMENT' || !message.conversationType) {
+      await this.assertDepartmentAccess(message.departmentKey, user);
+    } else if (message.conversationType !== 'COMPANY') {
+      throw new AppError('Message not found', 404);
+    }
+
     // Role check: HR and SUPER_ADMIN can delete any message; Staff can only delete own message
     if (user.role !== 'HR' && user.role !== 'SUPER_ADMIN') {
       const empDoc = await Employee.findOne({ user: user._id });
@@ -274,13 +367,18 @@ class ChatService {
     message.deletedForEveryone = true;
     message.deletedForEveryoneBy = user._id;
     message.deletedForEveryoneAt = new Date();
+    message.deletedAt = message.deletedForEveryoneAt;
+    message.deletedBy = user._id;
     await message.save();
 
     // Broadcast deletion event to room
     try {
       const socketService = require('./socketService');
-      socketService.emitMessageDeleted(message.departmentKey, {
+      const emitDeleted = message.conversationType === 'COMPANY' ? socketService.emitCompanyMessageDeleted : socketService.emitMessageDeleted;
+      emitDeleted.call(socketService, message.departmentKey, {
         messageId: message._id.toString(),
+        conversationType: message.conversationType || 'DEPARTMENT',
+        conversationId: message.conversationType === 'COMPANY' ? 'company' : message.departmentKey,
         departmentKey: message.departmentKey,
         deletedForEveryone: true
       });

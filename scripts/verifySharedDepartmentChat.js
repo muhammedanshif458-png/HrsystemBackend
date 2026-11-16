@@ -500,6 +500,23 @@ async function run() {
     const deleteBroadcast = await deleteEventPromise;
     assert(deleteBroadcast.messageId === delMsgId, 'Staff received real-time message_deleted event with matching messageId');
     assert(deleteBroadcast.deletedForEveryone === true, 'Deletion event confirms deletedForEveryone: true');
+
+    const deletedHistory = await request('/api/hr/departments/tech/messages', {
+      headers: { Authorization: `Bearer ${hrToken}` }
+    });
+    const tombstone = deletedHistory.body.data.find((m) => (m.id || m._id) === delMsgId);
+    assert(tombstone && tombstone.deletedForEveryone === true, 'Deleted department message remains as a history placeholder');
+    assert(tombstone.text === 'This message was deleted', 'Deleted message history does not expose original content');
+    const deletedSearch = await request('/api/hr/departments/tech/messages/search?q=Typo%20message', {
+      headers: { Authorization: `Bearer ${hrToken}` }
+    });
+    assert(deletedSearch.status === 200 && !deletedSearch.body.data.some((m) => (m.id || m._id) === delMsgId), 'Search never returns deleted original message content');
+
+    const forbiddenDelete = await request(`/api/staff/departments/tech/messages/${msgFromHrId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${teleStaffToken}` }
+    });
+    assert(forbiddenDelete.status === 403, 'Staff from another department cannot delete the message');
   }
 
   // -------------------------------------------------------------------------
@@ -525,6 +542,42 @@ async function run() {
     assert(paginatedRes.body.pagination !== undefined, 'Response includes pagination metadata');
     assert(paginatedRes.body.pagination.total >= 3, 'Pagination total tracks all conversation messages');
     assert(paginatedRes.body.pagination.departmentKey === 'tech', 'Pagination metadata specifies canonical department');
+
+    const searchRes = await request('/api/staff/chat/messages/search?q=Hotfix&page=1&limit=1', {
+      headers: { Authorization: `Bearer ${techStaffToken}` }
+    });
+    assert(searchRes.status === 200 && searchRes.body.data.length === 1, 'Department message search supports paginated results');
+    assert(searchRes.body.pagination.total >= 1 && searchRes.body.data[0].departmentKey === 'tech', 'Search results include pagination and stay in the authorized department');
+
+    const hiddenMsg = await request('/api/staff/chat/messages', {
+      method: 'POST', headers: { Authorization: `Bearer ${techStaffToken}` }, body: { text: 'persisted hidden message phrase' }
+    });
+    const hiddenId = hiddenMsg.body.data.id;
+    await request(`/api/staff/chat/messages/${hiddenId}/delete-for-me`, {
+      method: 'PATCH', headers: { Authorization: `Bearer ${techStaffToken}` }, body: { userId: teleStaffEmployeeId }
+    });
+    const refreshedAfterHide = await request('/api/staff/chat/messages', { headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(!refreshedAfterHide.body.data.some((m) => (m.id || m._id) === hiddenId), 'Delete-for-me persists after refreshing history and ignores supplied userId');
+    const reLogin = await request('/api/auth/login', { method: 'POST', body: { email: 'rohan.tech@testcorp.com', password: 'Password123!' } });
+    const tokenAfterLogin = reLogin.body.data.token || reLogin.body.data.accessToken;
+    const historyAfterLogin = await request('/api/staff/chat/messages', { headers: { Authorization: `Bearer ${tokenAfterLogin}` } });
+    assert(reLogin.status === 200 && !historyAfterLogin.body.data.some((m) => (m.id || m._id) === hiddenId), 'Delete-for-me remains persisted after logging in again');
+    const otherMemberBeforeClear = await request('/api/hr/departments/tech/messages', { headers: { Authorization: `Bearer ${hrToken}` } });
+    assert(otherMemberBeforeClear.body.data.some((m) => (m.id || m._id) === hiddenId), 'Delete-for-me preserves message for another department member');
+
+    const clearRes = await request('/api/staff/chat/clear', { method: 'POST', headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(clearRes.status === 200, 'Staff can clear own department chat history');
+    const afterClear = await request('/api/staff/chat/messages', { headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(!afterClear.body.data.some((m) => (m.id || m._id) === hiddenId), 'Clear chat hides existing messages for requester after refresh');
+    const otherMemberAfterClear = await request('/api/hr/departments/tech/messages', { headers: { Authorization: `Bearer ${hrToken}` } });
+    assert(otherMemberAfterClear.body.data.some((m) => (m.id || m._id) === hiddenId), 'Clear chat does not remove history for other members');
+    const afterClearPost = await request('/api/staff/chat/messages', {
+      method: 'POST', headers: { Authorization: `Bearer ${techStaffToken}` }, body: { text: 'visible after my clear operation' }
+    });
+    const afterClearHistory = await request('/api/staff/chat/messages', { headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(afterClearHistory.body.data.some((m) => (m.id || m._id) === afterClearPost.body.data.id), 'New messages appear after clear-chat marker');
+    const crossSearch = await request('/api/staff/departments/telecalling/messages/search?q=visible', { headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(crossSearch.status === 403, 'Cross-department message search is rejected');
 
     reconnectStaffSocket.disconnect();
   }

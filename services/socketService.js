@@ -81,6 +81,9 @@ class SocketService {
         });
       }
 
+      socket.join('company');
+      socket.emit('joined_room', { conversationType: 'COMPANY', conversationId: 'company', room: 'company', autoJoined: true });
+
       // Explicit join_department request (HR switching departments or staff joining)
       socket.on('join_department', ({ departmentKey }, callback) => {
         try {
@@ -111,6 +114,11 @@ class SocketService {
       // Send message via Socket.IO
       socket.on('send_message', async (data, callback) => {
         try {
+          if (String(data?.conversationType || '').toUpperCase() === 'COMPANY' || data?.conversationId === 'company') {
+            const savedMsg = await chatService.sendCompanyMessage(data?.text || data?.message, user, { clientMessageId: data?.clientMessageId || data?.tempId });
+            if (typeof callback === 'function') callback({ success: true, data: savedMsg });
+            return;
+          }
           let targetDeptKey = data?.departmentKey || data?.deptKey;
           if (role === 'STAFF') {
             targetDeptKey = socket.departmentKey;
@@ -182,6 +190,17 @@ class SocketService {
     if (!io) return;
     const room = `department:${deptKey}`;
     io.to(room).emit('message_deleted', data);
+  }
+
+  emitCompanyNewMessage(message) {
+    if (!io) return;
+    io.to('company').emit('new_message', message);
+    io.to('company').emit('message_received', message);
+  }
+
+  emitCompanyMessageDeleted(_key, data) {
+    if (!io) return;
+    io.to('company').emit('message_deleted', data);
   }
 
   /**

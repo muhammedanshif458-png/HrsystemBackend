@@ -117,9 +117,18 @@ router.put('/tasks/:id', taskController.updateTask);
 router.delete('/tasks/:id', taskController.deleteTask);
 
 // Department Chat & Messaging Endpoints (Supports both :deptKey and :departmentKey)
+router.get('/company-chat', chatController.getCompanyConversation);
+router.get('/company-chat/messages', chatController.getCompanyMessages);
+router.post('/company-chat/messages', chatController.sendCompanyMessage);
+router.delete('/company-chat/messages/:messageId', chatController.deleteMessageForEveryone);
+router.patch('/company-chat/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);
 router.get('/departments/:deptKey/messages', chatController.getDepartmentMessages);
+router.get('/departments/:deptKey/messages/search', chatController.searchDepartmentMessages);
+router.post('/departments/:deptKey/messages/clear', chatController.clearDepartmentChat);
 router.post('/departments/:deptKey/messages', chatController.sendDepartmentMessage);
 router.get('/departments/:departmentKey/messages', chatController.getDepartmentMessages);
+router.get('/departments/:departmentKey/messages/search', chatController.searchDepartmentMessages);
+router.post('/departments/:departmentKey/messages/clear', chatController.clearDepartmentChat);
 router.post('/departments/:departmentKey/messages', chatController.sendDepartmentMessage);
 router.delete('/departments/:deptKey/messages/:messageId', chatController.deleteMessageForEveryone);
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', chatController.deleteMessageForMe);

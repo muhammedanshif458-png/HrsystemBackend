@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const departmentChatMessageSchema = new mongoose.Schema(
   {
+    conversationType: {
+      type: String,
+      enum: ['DEPARTMENT', 'COMPANY'],
+      default: 'DEPARTMENT',
+      index: true
+    },
     departmentKey: {
       type: String,
       required: [true, 'Department key is required'],
@@ -72,7 +78,9 @@ const departmentChatMessageSchema = new mongoose.Schema(
     deletedForEveryoneAt: {
       type: Date,
       default: null
-    }
+    },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
   },
   {
     timestamps: true,
@@ -87,6 +95,7 @@ departmentChatMessageSchema.virtual('id').get(function() {
 
 // Indexes
 departmentChatMessageSchema.index({ departmentKey: 1, timestamp: -1 });
+departmentChatMessageSchema.index({ conversationType: 1, departmentKey: 1, timestamp: -1 });
 departmentChatMessageSchema.index({ departmentKey: 1, timestamp: 1 });
 departmentChatMessageSchema.index({ senderId: 1 });
 

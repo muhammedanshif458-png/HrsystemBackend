@@ -28,6 +28,7 @@
     "test:daily-updates": "node scripts/verifyDailyUpdatesLive.js",
     "test:lifecycle": "node scripts/verifyEmployeeLifecycle.js",
     "test:chat": "node scripts/verifySharedDepartmentChat.js",
+    "test:company-chat": "node scripts/verifyCompanyChat.js",
     "test:dashboard-attendance": "node scripts/verifyDashboardAttendanceMetrics.js",
     "test:wfh-metrics": "node scripts/verifyHrDashboardWfhMetric.js",
     "test:staff-attendance": "node scripts/verifyStaffAttendanceHistory.js",

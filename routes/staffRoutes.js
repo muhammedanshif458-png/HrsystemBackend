@@ -83,16 +83,27 @@ router.get('/daily-updates', staffOnly, dailyUpdateController.getStaffDailyUpdat
 router.get('/daily-updates/:id', staffOnly, dailyUpdateIdParamValidator, dailyUpdateController.getStaffDailyUpdateById);
 
 // Department Chat & Messaging
+router.get('/company-chat', departmentChatAuth, chatController.getCompanyConversation);
+router.get('/company-chat/messages', departmentChatAuth, chatController.getCompanyMessages);
+router.post('/company-chat/messages', departmentChatAuth, chatController.sendCompanyMessage);
+router.delete('/company-chat/messages/:messageId', departmentChatAuth, chatController.deleteMessageForEveryone);
+router.patch('/company-chat/messages/:messageId/delete-for-me', departmentChatAuth, chatController.deleteMessageForMe);
 // Primary StaffHub conversation endpoints
 router.get('/chat/messages', staffOnly, chatController.getStaffMessages);
+router.get('/chat/messages/search', staffOnly, chatController.searchStaffDepartmentMessages);
 router.post('/chat/messages', staffOnly, chatController.sendStaffMessage);
+router.post('/chat/clear', staffOnly, chatController.clearStaffDepartmentChat);
 router.delete('/chat/messages/:messageId', staffOnly, chatController.deleteMessageForEveryone);
 router.patch('/chat/messages/:messageId/delete-for-me', staffOnly, chatController.deleteMessageForMe);
 
 // Department-specific routes (accessible to STAFF, HR, and SUPER_ADMIN)
 router.get('/departments/:deptKey/messages', departmentChatAuth, chatController.getDepartmentMessages);
+router.get('/departments/:deptKey/messages/search', departmentChatAuth, chatController.searchDepartmentMessages);
+router.post('/departments/:deptKey/messages/clear', departmentChatAuth, chatController.clearDepartmentChat);
 router.post('/departments/:deptKey/messages', departmentChatAuth, chatController.sendDepartmentMessage);
 router.get('/departments/:departmentKey/messages', departmentChatAuth, chatController.getDepartmentMessages);
+router.get('/departments/:departmentKey/messages/search', departmentChatAuth, chatController.searchDepartmentMessages);
+router.post('/departments/:departmentKey/messages/clear', departmentChatAuth, chatController.clearDepartmentChat);
 router.post('/departments/:departmentKey/messages', departmentChatAuth, chatController.sendDepartmentMessage);
 router.delete('/departments/:deptKey/messages/:messageId', departmentChatAuth, chatController.deleteMessageForEveryone);
 router.patch('/departments/:deptKey/messages/:messageId/delete-for-me', departmentChatAuth, chatController.deleteMessageForMe);

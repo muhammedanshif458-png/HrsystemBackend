@@ -2,6 +2,23 @@ const chatService = require('../services/chatService');
 const { sendSuccess } = require('../utils/response');
 
 class ChatController {
+  async getCompanyMessages(req, res, next) {
+    try {
+      const { messages, pagination } = await chatService.getCompanyMessages(req.user, req.query);
+      return sendSuccess(res, 'Company messages retrieved successfully', messages, 200, pagination);
+    } catch (err) { next(err); }
+  }
+
+  async sendCompanyMessage(req, res, next) {
+    try {
+      const data = await chatService.sendCompanyMessage(req.body.text || req.body.message, req.user, { clientMessageId: req.body.clientMessageId });
+      return sendSuccess(res, 'Company message sent successfully', data, 201);
+    } catch (err) { next(err); }
+  }
+
+  getCompanyConversation(req, res) {
+    return sendSuccess(res, 'Company conversation retrieved successfully', { conversationType: 'COMPANY', conversationId: 'company', participantRoles: ['STAFF', 'HR', 'SUPER_ADMIN'] });
+  }
   /**
    * GET /api/hr/departments/:deptKey/messages
    * GET /api/hr/departments/:departmentKey/messages
@@ -17,6 +34,38 @@ class ChatController {
     } catch (err) {
       next(err);
     }
+  }
+
+  async clearDepartmentChat(req, res, next) {
+    try {
+      const deptKey = req.params.deptKey || req.params.departmentKey;
+      const result = await chatService.clearDepartmentChat(deptKey, req.user);
+      return sendSuccess(res, result.message, result);
+    } catch (err) { next(err); }
+  }
+
+  async searchDepartmentMessages(req, res, next) {
+    try {
+      const deptKey = req.params.deptKey || req.params.departmentKey;
+      const { messages, pagination } = await chatService.searchDepartmentMessages(deptKey, req.user, req.query);
+      return sendSuccess(res, 'Department messages searched successfully', messages, 200, pagination);
+    } catch (err) { next(err); }
+  }
+
+  async clearStaffDepartmentChat(req, res, next) {
+    try {
+      const staffInfo = await chatService.getStaffAuthorizedDepartment(req.user);
+      const result = await chatService.clearDepartmentChat(staffInfo.departmentKey, req.user);
+      return sendSuccess(res, result.message, result);
+    } catch (err) { next(err); }
+  }
+
+  async searchStaffDepartmentMessages(req, res, next) {
+    try {
+      const staffInfo = await chatService.getStaffAuthorizedDepartment(req.user);
+      const { messages, pagination } = await chatService.searchDepartmentMessages(staffInfo.departmentKey, req.user, req.query);
+      return sendSuccess(res, 'Department messages searched successfully', messages, 200, pagination);
+    } catch (err) { next(err); }
   }
 
   /**
@@ -85,9 +134,9 @@ class ChatController {
   async deleteMessageForMe(req, res, next) {
     try {
       const { messageId } = req.params;
-      const userId = req.body.userId || req.user._id;
+      const userId = req.user._id;
 
-      const result = await chatService.deleteMessageForMe(messageId, userId);
+      const result = await chatService.deleteMessageForMe(messageId, req.user);
       return sendSuccess(res, result.message, null);
     } catch (err) {
       next(err);
