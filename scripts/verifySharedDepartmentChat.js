@@ -20,6 +20,7 @@ let socketUrl;
 let hrToken;
 let superAdminToken;
 let techStaffToken;
+let secondTechStaffToken;
 let teleStaffToken;
 let techStaffEmployeeId;
 let teleStaffEmployeeId;
@@ -170,6 +171,14 @@ async function run() {
   });
   assert(techLogin.status === 200, 'Tech staff login successful');
   techStaffToken = techLogin.body.data.token || techLogin.body.data.accessToken;
+
+  // Second Tech employee verifies same-department peer deletion behavior.
+  const secondTechUser = new User({ firstName: 'Maya', lastName: 'Nair', email: 'maya.tech@testcorp.com', password: 'Password123!', role: 'STAFF', isActive: true });
+  await secondTechUser.save();
+  await new Employee({ employeeId: 'TECH-102', user: secondTechUser._id, firstName: 'Maya', lastName: 'Nair', email: 'maya.tech@testcorp.com', department: 'Tech & Engineering', designation: 'QA Engineer', status: 'ACTIVE' }).save();
+  const secondTechLogin = await request('/api/auth/login', { method: 'POST', body: { email: 'maya.tech@testcorp.com', password: 'Password123!' } });
+  assert(secondTechLogin.status === 200, 'Second Tech staff login successful');
+  secondTechStaffToken = secondTechLogin.body.data.token || secondTechLogin.body.data.accessToken;
 
   // Telecalling Staff User & Employee
   const teleUser = new User({
@@ -477,6 +486,11 @@ async function run() {
     });
     assert(delForMe.status === 200, 'PATCH /delete-for-me returns 200 OK');
 
+    const hrHideForMe = await request(`/api/hr/departments/tech/messages/${delMsgId}/delete-for-me`, {
+      method: 'PATCH', headers: { Authorization: `Bearer ${hrToken}` }, body: { userId: teleStaffEmployeeId }
+    });
+    assert(hrHideForMe.status === 200, 'HR can hide a staff message for HR only');
+
     // Verify hidden from staff's get
     const staffListAfter = await request('/api/staff/chat/messages', {
       headers: { Authorization: `Bearer ${techStaffToken}` }
@@ -484,39 +498,66 @@ async function run() {
     assert(!staffListAfter.body.data.some((m) => (m.id || m._id) === delMsgId), 'Message hidden from user who deleted for me');
 
     // Still visible to HR
-    const hrListAfter = await request('/api/hr/departments/tech/messages', {
-      headers: { Authorization: `Bearer ${hrToken}` }
+    const hrListAfter = await request('/api/staff/departments/tech/messages', {
+      headers: { Authorization: `Bearer ${superAdminToken}` }
     });
     assert(hrListAfter.body.data.some((m) => (m.id || m._id) === delMsgId), 'Message remains visible to other conversation members');
 
     // Delete for everyone by HR -> real-time broadcast to room
-    const deleteEventPromise = waitForEvent(techStaffSocket, 'message_deleted');
-    const delForEveryone = await request(`/api/hr/departments/tech/messages/${delMsgId}`, {
+    const forbiddenHrDelete = await request(`/api/hr/departments/tech/messages/${delMsgId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${hrToken}` }
     });
-    assert(delForEveryone.status === 200, 'DELETE /messages/:id returns 200 OK (Delete for everyone)');
+    assert(forbiddenHrDelete.status === 403, 'HR cannot delete a staff message for everyone');
+
+    const deleteEventPromise = waitForEvent(hrSocket, 'message_deleted');
+    const delForEveryone = await request(`/api/staff/chat/messages/${delMsgId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${techStaffToken}` }
+    });
+    assert(delForEveryone.status === 200, 'Original staff sender can delete own message for everyone');
 
     const deleteBroadcast = await deleteEventPromise;
     assert(deleteBroadcast.messageId === delMsgId, 'Staff received real-time message_deleted event with matching messageId');
     assert(deleteBroadcast.deletedForEveryone === true, 'Deletion event confirms deletedForEveryone: true');
 
-    const deletedHistory = await request('/api/hr/departments/tech/messages', {
-      headers: { Authorization: `Bearer ${hrToken}` }
+    const deletedHistory = await request('/api/staff/departments/tech/messages', {
+      headers: { Authorization: `Bearer ${superAdminToken}` }
     });
     const tombstone = deletedHistory.body.data.find((m) => (m.id || m._id) === delMsgId);
     assert(tombstone && tombstone.deletedForEveryone === true, 'Deleted department message remains as a history placeholder');
     assert(tombstone.text === 'This message was deleted', 'Deleted message history does not expose original content');
-    const deletedSearch = await request('/api/hr/departments/tech/messages/search?q=Typo%20message', {
-      headers: { Authorization: `Bearer ${hrToken}` }
+    const storedTombstone = await DepartmentChatMessage.findById(delMsgId);
+    assert(storedTombstone && storedTombstone.deletedForEveryone === true, 'Delete-for-everyone preserves the soft-deleted database record');
+    const deletedSearch = await request('/api/staff/departments/tech/messages/search?q=Typo%20message', {
+      headers: { Authorization: `Bearer ${superAdminToken}` }
     });
     assert(deletedSearch.status === 200 && !deletedSearch.body.data.some((m) => (m.id || m._id) === delMsgId), 'Search never returns deleted original message content');
+
+    const hrOwnMessage = await request('/api/hr/departments/tech/messages', { method: 'POST', headers: { Authorization: `Bearer ${hrToken}` }, body: { text: 'HR own message deletion' } });
+    const hrOwnId = hrOwnMessage.body.data.id;
+    const hrOwnDelete = await request(`/api/hr/departments/tech/messages/${hrOwnId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${hrToken}` } });
+    assert(hrOwnDelete.status === 200, 'HR can delete HR own message for everyone');
+
+    const peerMessage = await request('/api/staff/chat/messages', { method: 'POST', headers: { Authorization: `Bearer ${secondTechStaffToken}` }, body: { text: 'message from second Tech staff' } });
+    const peerId = peerMessage.body.data.id;
+    const staffPeerDelete = await request(`/api/staff/chat/messages/${peerId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(staffPeerDelete.status === 403, 'Staff cannot delete another Tech staff member’s message for everyone');
+    const adminPeerDelete = await request(`/api/hr/departments/tech/messages/${peerId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${superAdminToken}` } });
+    assert(adminPeerDelete.status === 403, 'SUPER_ADMIN cannot delete another employee’s message for everyone');
+    const staffHidePeer = await request(`/api/staff/chat/messages/${peerId}/delete-for-me`, { method: 'PATCH', headers: { Authorization: `Bearer ${techStaffToken}` } });
+    assert(staffHidePeer.status === 200, 'Staff can hide another department member message for themselves');
+    const peerHistory = await request('/api/hr/departments/tech/messages', { headers: { Authorization: `Bearer ${hrToken}` } });
+    assert(peerHistory.body.data.some((m) => (m.id || m._id) === peerId), 'Delete-for-me leaves peer message visible to others');
 
     const forbiddenDelete = await request(`/api/staff/departments/tech/messages/${msgFromHrId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${teleStaffToken}` }
     });
     assert(forbiddenDelete.status === 403, 'Staff from another department cannot delete the message');
+    const mismatchedDepartmentDelete = await request(`/api/hr/departments/telecalling/messages/${peerId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${hrToken}` }
+    });
+    assert(mismatchedDepartmentDelete.status === 404, 'Department endpoint cannot target a message from another department');
   }
 
   // -------------------------------------------------------------------------

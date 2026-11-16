@@ -134,9 +134,8 @@ class ChatController {
   async deleteMessageForMe(req, res, next) {
     try {
       const { messageId } = req.params;
-      const userId = req.user._id;
-
-      const result = await chatService.deleteMessageForMe(messageId, req.user);
+      const expectedDeptKey = req.params.deptKey || req.params.departmentKey || null;
+      const result = await chatService.deleteMessageForMe(messageId, req.user, expectedDeptKey);
       return sendSuccess(res, result.message, null);
     } catch (err) {
       next(err);
@@ -151,8 +150,8 @@ class ChatController {
   async deleteMessageForEveryone(req, res, next) {
     try {
       const { messageId } = req.params;
-
-      const result = await chatService.deleteMessageForEveryone(messageId, req.user);
+      const expectedDeptKey = req.params.deptKey || req.params.departmentKey || null;
+      const result = await chatService.deleteMessageForEveryone(messageId, req.user, expectedDeptKey);
       return sendSuccess(res, result.message, null);
     } catch (err) {
       next(err);

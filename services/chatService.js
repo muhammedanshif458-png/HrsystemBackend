@@ -307,7 +307,7 @@ class ChatService {
   /**
    * Delete message for user (hide from user view)
    */
-  async deleteMessageForMe(messageId, user) {
+  async deleteMessageForMe(messageId, user, expectedDeptKey = null) {
     if (!mongoose.Types.ObjectId.isValid(messageId)) {
       throw new AppError('Invalid message ID', 400);
     }
@@ -318,6 +318,9 @@ class ChatService {
     }
 
     if (message.conversationType === 'DEPARTMENT' || !message.conversationType) {
+      if (expectedDeptKey && this.normalizeDeptKey(expectedDeptKey) !== message.departmentKey) {
+        throw new AppError('Message not found', 404);
+      }
       await this.assertDepartmentAccess(message.departmentKey, user);
     } else if (message.conversationType !== 'COMPANY') {
       throw new AppError('Message not found', 404);
@@ -334,7 +337,7 @@ class ChatService {
   /**
    * Delete message for everyone (soft tombstone)
    */
-  async deleteMessageForEveryone(messageId, user) {
+  async deleteMessageForEveryone(messageId, user, expectedDeptKey = null) {
     if (!mongoose.Types.ObjectId.isValid(messageId)) {
       throw new AppError('Invalid message ID', 400);
     }
@@ -345,23 +348,39 @@ class ChatService {
     }
 
     if (message.conversationType === 'DEPARTMENT' || !message.conversationType) {
+      if (expectedDeptKey && this.normalizeDeptKey(expectedDeptKey) !== message.departmentKey) {
+        throw new AppError('Message not found', 404);
+      }
       await this.assertDepartmentAccess(message.departmentKey, user);
     } else if (message.conversationType !== 'COMPANY') {
       throw new AppError('Message not found', 404);
     }
 
-    // Role check: HR and SUPER_ADMIN can delete any message; Staff can only delete own message
-    if (user.role !== 'HR' && user.role !== 'SUPER_ADMIN') {
+    if (message.conversationType === 'DEPARTMENT' || !message.conversationType) {
+      let isOriginalSender = message.senderUser?.toString() === user._id.toString();
+
+      // Preserve deletion for legacy department messages that predate senderUser.
+      if (!isOriginalSender && !message.senderUser) {
+        if (message.senderRole === 'STAFF') {
+          const originalEmployeeId = message.senderEmployee || message.senderId;
+          isOriginalSender = Boolean(await Employee.exists({ _id: originalEmployeeId, user: user._id }));
+        } else {
+          isOriginalSender = message.senderId === user._id.toString();
+        }
+      }
+
+      if (!isOriginalSender) {
+        throw new AppError('Only the original sender can delete a department message for everyone', 403);
+      }
+    } else if (user.role !== 'HR' && user.role !== 'SUPER_ADMIN') {
+      // Keep the existing company-chat moderation behavior unchanged.
       const empDoc = await Employee.findOne({ user: user._id });
       const isOwner =
         (message.senderUser && message.senderUser.toString() === user._id.toString()) ||
         (empDoc && message.senderEmployee && message.senderEmployee.toString() === empDoc._id.toString()) ||
         message.senderId === user._id.toString() ||
         (empDoc && message.senderId === empDoc._id.toString());
-
-      if (!isOwner) {
-        throw new AppError('Only the sender or an HR manager can delete a message for everyone', 403);
-      }
+      if (!isOwner) throw new AppError('Only the sender or an HR manager can delete a message for everyone', 403);
     }
 
     message.deletedForEveryone = true;
