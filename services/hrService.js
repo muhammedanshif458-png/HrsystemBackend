@@ -98,18 +98,21 @@ class HRService {
     const [
       totalEmployees,
       activeEmployees,
-      inactiveEmployees,
+      inactiveEmployeesRaw,
+      deactivatedUsers,
       active,
       todayRows,
       approvedTodayLeaves,
       pendingLeaves,
       approvedLeaves,
       openTasks,
-      resignedLast30Days
+      resignedLast30Days,
+      resignedEmployees
     ] = await Promise.all([
       Employee.countDocuments({ isDeleted: { $ne: true } }),
       Employee.countDocuments({ status: 'ACTIVE', isDeleted: { $ne: true } }),
       Employee.countDocuments({ status: 'INACTIVE', isDeleted: { $ne: true } }),
+      User.find({ isActive: false }).select('_id').lean(),
       Employee.find({ status: 'ACTIVE', isDeleted: { $ne: true } }).select('_id').lean(),
       Attendance.find({ date: { $gte: startOfDay, $lte: endOfDay } })
         .select('employee status late isLate checkIn workMode createdAt date scheduledCheckIn scheduleSnapshot')
@@ -120,8 +123,22 @@ class HRService {
       Leave.countDocuments({ status: 'PENDING' }),
       Leave.countDocuments({ status: 'APPROVED' }),
       Task.countDocuments({ status: { $in: ['pending', 'in-progress'] }, isDeleted: { $ne: true } }),
-      Employee.countDocuments({ status: { $in: ['TERMINATED', 'RESIGNED'] }, isDeleted: { $ne: true }, updatedAt: { $gte: thirtyDaysAgo } })
+      Employee.countDocuments({ status: { $in: ['TERMINATED', 'RESIGNED'] }, isDeleted: { $ne: true }, updatedAt: { $gte: thirtyDaysAgo } }),
+      Employee.countDocuments({ status: 'RESIGNED', isDeleted: { $ne: true } })
     ]);
+
+    const deactivatedUserIds = (deactivatedUsers || []).map(u => u._id);
+    let inactiveStaffCount = inactiveEmployeesRaw || 0;
+    if (deactivatedUserIds.length > 0) {
+      inactiveStaffCount = await Employee.countDocuments({
+        isDeleted: { $ne: true },
+        $or: [
+          { status: 'INACTIVE' },
+          { user: { $in: deactivatedUserIds }, status: { $nin: ['RESIGNED', 'TERMINATED'] } }
+        ]
+      });
+    }
+
     const metrics = summarizeAttendanceDay({
       activeEmployeeIds: active.map(employee => employee._id),
       attendanceRows: todayRows,
@@ -132,18 +149,23 @@ class HRService {
     const notCheckedIn = Math.max(0, eligibleEmployees - (metrics.todayPresent || 0));
     return {
       totalEmployees,
+      totalStaff: totalEmployees,
       activeEmployees,
-      inactiveEmployees,
-      resignedEmployees: await Employee.countDocuments({ status: 'RESIGNED', isDeleted: { $ne: true } }),
+      activeStaff: activeEmployees,
+      inactiveEmployees: inactiveStaffCount,
+      inactiveStaff: inactiveStaffCount,
+      resignedEmployees,
       eligibleEmployees,
       notCheckedIn,
       openTasks,
       resignedLast30Days,
       ...metrics,
+      presentToday: metrics.todayPresent || 0,
       todayWfh: metrics.todayWfh,
       wfhToday: metrics.todayWfh,
       wfh: metrics.todayWfh,
       todayLate: metrics.lateArrivals,
+      lateCheckIns: metrics.lateArrivals || 0,
       pendingLeaves,
       approvedLeaves
     };
