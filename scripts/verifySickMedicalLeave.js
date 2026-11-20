@@ -392,6 +392,16 @@ async function run() {
         assert.strictEqual(l.isMedical, true, `MEDICAL leave ${l._id} must have isMedical=true`);
         assert.strictEqual(l.isSick, false, `MEDICAL leave ${l._id} must have isSick=false`);
       });
+      const listedMedicalLeave = medLeaves.find(l => l._id === medicalLeaveId);
+      assert.ok(listedMedicalLeave, 'HR list must include the uploaded medical leave');
+      assert.strictEqual(listedMedicalLeave.hasMedicalProof, true, 'HR list must retain hasMedicalProof');
+      assert.strictEqual(listedMedicalLeave.medicalProofFileName, 'medical_certificate.pdf');
+      assert.strictEqual(listedMedicalLeave.medicalProofFileType, 'application/pdf');
+      assert.ok(listedMedicalLeave.documentId, 'HR list must include the secure document ID');
+      assert.strictEqual(listedMedicalLeave.medicalProofUrl, `/api/hr/documents/${listedMedicalLeave.documentId}/download`);
+      assert.ok(!('document' in listedMedicalLeave), 'HR list must not expose raw document metadata/storage path');
+      assert.ok(!('attachment' in listedMedicalLeave), 'HR list must not expose raw attachment storage path');
+      assert.ok(!listedMedicalLeave.medicalProofUrl.includes('uploads'), 'HR list must not return public storage paths');
       pass(`HR API returns SICK (${sickLeaves.length}) and MEDICAL (${medLeaves.length}) distinctly with correct flags`);
     } catch (e) { fail('HR API distinct SICK/MEDICAL', e); }
 

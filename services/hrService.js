@@ -1147,6 +1147,7 @@ return {
       Leave.find(filter)
         .populate('employee', 'employeeId firstName lastName department')
         .populate('approvedBy', 'firstName lastName role')
+        .populate('document', 'originalName fileName fileType createdAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1158,7 +1159,9 @@ return {
 
     return {
       leaves: enrichLeaveResponses(leaves, 'hr').map((leave) => {
-        const { document, documentUrl, documentName, attachment, medicalProofUrl, medicalProofFileName, medicalProofFileType, documentId, hasMedicalProof, ...safeLeave } = leave;
+        // Keep the safe, authenticated proof URL and display metadata for HR.
+        // Never serialize raw document/attachment objects, which contain storage paths.
+        const { document, attachment, ...safeLeave } = leave;
         return safeLeave;
       }),
       pagination: { page, limit, total, totalPages }
