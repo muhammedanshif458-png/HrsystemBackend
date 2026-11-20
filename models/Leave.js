@@ -15,6 +15,32 @@ const leaveSchema = new mongoose.Schema(
       },
       required: [true, 'Leave type is required']
     },
+    durationType: {
+      type: String,
+      enum: {
+        values: ['FULL_DAY', 'HALF_DAY'],
+        message: '{VALUE} is not a valid duration type'
+      },
+      default: 'FULL_DAY'
+    },
+    halfDaySession: {
+      type: String,
+      enum: {
+        values: ['FORENOON', 'AFTERNOON', null],
+        message: '{VALUE} is not a valid half-day session'
+      },
+      default: null
+    },
+    totalDays: {
+      type: Number,
+      default: 1,
+      min: [0.5, 'Duration cannot be less than 0.5 days']
+    },
+    duration: {
+      type: Number,
+      default: 1,
+      min: [0.5, 'Duration cannot be less than 0.5 days']
+    },
     startDate: {
       type: Date,
       required: [true, 'Start date is required']

@@ -231,6 +231,15 @@ const applyLeaveValidator = [
       if (req.body.leaveType) {
         req.body.leaveType = normalizeLeaveType(req.body.leaveType);
       }
+      if (req.body.durationType) {
+        req.body.durationType = String(req.body.durationType).trim().toUpperCase();
+      } else {
+        req.body.durationType = 'FULL_DAY';
+      }
+      if (req.body.halfDaySession !== undefined && req.body.halfDaySession !== null) {
+        const trimmed = String(req.body.halfDaySession).trim();
+        req.body.halfDaySession = trimmed ? trimmed.toUpperCase() : null;
+      }
     }
     next();
   },
@@ -239,6 +248,26 @@ const applyLeaveValidator = [
     .notEmpty().withMessage('Leave type is required')
     .isIn(['CASUAL', 'SICK', 'ANNUAL', 'MEDICAL', 'EARNED', 'UNPAID', 'OTHER'])
     .withMessage('Leave type must be CASUAL, SICK, ANNUAL, MEDICAL, UNPAID, or OTHER'),
+  body('durationType')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['FULL_DAY', 'HALF_DAY'])
+    .withMessage('Duration type must be FULL_DAY or HALF_DAY'),
+  body('halfDaySession')
+    .custom((val, { req }) => {
+      const durationType = (req.body?.durationType || 'FULL_DAY').toUpperCase();
+      if (durationType === 'HALF_DAY') {
+        if (!val || !['FORENOON', 'AFTERNOON'].includes(String(val).trim().toUpperCase())) {
+          throw new Error('Half-day session is required and must be FORENOON or AFTERNOON');
+        }
+      } else if (durationType === 'FULL_DAY') {
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          throw new Error('Full-day leave must not have a half-day session');
+        }
+      }
+      return true;
+    }),
   body('startDate')
     .notEmpty().withMessage('Start date is required')
     .isISO8601().withMessage('Start date must be a valid date (YYYY-MM-DD)')
@@ -260,6 +289,15 @@ const applyLeaveValidator = [
       }
       if (end < start) {
         throw new Error('End date cannot be earlier than start date');
+      }
+
+      const durationType = (req.body?.durationType || 'FULL_DAY').toUpperCase();
+      if (durationType === 'HALF_DAY') {
+        const startStr = req.body.startDate ? String(req.body.startDate).slice(0, 10) : '';
+        const endStr = String(endDate).slice(0, 10);
+        if (startStr !== endStr) {
+          throw new Error('Half-day leave must have the same start and end date');
+        }
       }
       return true;
     }),

@@ -17,7 +17,8 @@ class SocketService {
       cors: {
         origin: corsOptions.origin || '*',
         credentials: true,
-        methods: ['GET', 'POST']
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: corsOptions.allowedHeaders || ['Content-Type', 'Authorization', 'Accept', 'Origin']
       },
       pingTimeout: 30000,
       pingInterval: 15000

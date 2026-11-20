@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Employee = require('../models/Employee');
 const StaffLoginHistory = require('../models/StaffLoginHistory');
 const env = require('../config/env');
+const logger = require('../utils/logger');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, generateResetToken, hashToken } = require('../utils/jwt');
 const { AppError } = require('../middleware/errorMiddleware');
 
@@ -15,13 +16,24 @@ class AuthService {
   async login(email, password, loginContext = {}) {
     // Explicitly select password field as it is marked select: false
     const normalizedEmail = String(email || '').trim().toLowerCase();
+
+    if (!env.isProduction) {
+      logger.debug(`[Auth-Dev] Login attempt initiated for email: "${normalizedEmail}"`);
+    }
+
     const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (!user) {
+      if (!env.isProduction) {
+        logger.warn(`[Auth-Dev] Login 401: No user found matching email "${normalizedEmail}". Check that the user exists in the database.`);
+      }
       throw new AppError('Invalid email or password', 401);
     }
 
     if (!user.isActive) {
+      if (!env.isProduction) {
+        logger.warn(`[Auth-Dev] Login 403: User account "${normalizedEmail}" is deactivated (isActive = false).`);
+      }
       throw new AppError('Your account has been deactivated. Please contact HR.', 403);
     }
 
@@ -37,12 +49,25 @@ class AuthService {
           user.refreshToken = null;
           await user.save();
         }
+        if (!env.isProduction) {
+          logger.warn(`[Auth-Dev] Login 403: Linked employee profile for "${normalizedEmail}" is inactive, terminated, or deleted.`);
+        }
         throw new AppError('Your account has been deactivated. Please contact HR.', 403);
       }
     }
 
+    if (!user.password) {
+      if (!env.isProduction) {
+        logger.error(`[Auth-Dev] Login 401: Stored user "${normalizedEmail}" has no password hash.`);
+      }
+      throw new AppError('Invalid email or password', 401);
+    }
+
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      if (!env.isProduction) {
+        logger.warn(`[Auth-Dev] Login 401: Password mismatch for user "${normalizedEmail}".`);
+      }
       throw new AppError('Invalid email or password', 401);
     }
 

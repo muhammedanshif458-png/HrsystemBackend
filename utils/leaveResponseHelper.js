@@ -202,18 +202,33 @@ function enrichLeaveResponse(leave, rolePrefix = 'staff', employeeContext = null
     obj.documentUrl = `/api/${rolePrefix}/documents/${docId}/download`;
   }
 
-  // ── Compute totalDays and daysCount if absent ───────────────────────────
-  if (obj.startDate && obj.endDate) {
-    if (!obj.totalDays) {
+  // ── Compute totalDays, duration, and daysCount if absent ───────────────────────────
+  const durationType = (obj.durationType || (Number(obj.totalDays) === 0.5 ? 'HALF_DAY' : 'FULL_DAY')).toUpperCase();
+  obj.durationType = durationType;
+
+  if (durationType === 'HALF_DAY') {
+    obj.halfDaySession = obj.halfDaySession ? String(obj.halfDaySession).trim().toUpperCase() : null;
+    obj.isHalfDay = true;
+    obj.isFullDay = false;
+    obj.totalDays = 0.5;
+  } else {
+    obj.halfDaySession = null;
+    obj.isHalfDay = false;
+    obj.isFullDay = true;
+    if (obj.totalDays !== undefined && obj.totalDays !== null && !isNaN(Number(obj.totalDays))) {
+      obj.totalDays = Number(obj.totalDays);
+    } else if (obj.startDate && obj.endDate) {
       const start = new Date(obj.startDate);
       const end = new Date(obj.endDate);
       const diff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
       obj.totalDays = diff > 0 ? diff : 1;
-    }
-    if (!obj.daysCount) {
-      obj.daysCount = obj.totalDays;
+    } else {
+      obj.totalDays = 1;
     }
   }
+
+  obj.duration = obj.totalDays;
+  obj.daysCount = obj.totalDays;
 
   return obj;
 }

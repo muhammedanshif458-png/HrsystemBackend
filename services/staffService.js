@@ -693,6 +693,8 @@ class StaffService {
       leaveType,
       startDate,
       endDate,
+      durationType = 'FULL_DAY',
+      halfDaySession = null,
       reason,
       documentId,
       documentUrl,
@@ -712,20 +714,93 @@ class StaffService {
       throw new AppError('End date cannot be earlier than start date', 400);
     }
 
+    const normalizedDurationType = String(durationType || 'FULL_DAY').trim().toUpperCase();
+    if (!['FULL_DAY', 'HALF_DAY'].includes(normalizedDurationType)) {
+      throw new AppError('Duration type must be FULL_DAY or HALF_DAY', 400);
+    }
+
+    let normalizedHalfDaySession = null;
+    let totalDays = 1;
+    let duration = 1;
+
+    if (normalizedDurationType === 'HALF_DAY') {
+      const sStr = String(startDate).slice(0, 10);
+      const eStr = String(endDate).slice(0, 10);
+      if (sStr !== eStr) {
+        throw new AppError('Half-day leave must have the same start and end date', 400);
+      }
+      if (!halfDaySession || !['FORENOON', 'AFTERNOON'].includes(String(halfDaySession).trim().toUpperCase())) {
+        throw new AppError('Half-day session is required and must be FORENOON or AFTERNOON', 400);
+      }
+      normalizedHalfDaySession = String(halfDaySession).trim().toUpperCase();
+      totalDays = 0.5;
+      duration = 0.5;
+    } else {
+      if (halfDaySession !== undefined && halfDaySession !== null && String(halfDaySession).trim() !== '') {
+        throw new AppError('Full-day leave must not have a half-day session', 400);
+      }
+
+      // Calculate working days according to Tech (Mon-Fri) and Telecalling (Mon-Sat) rules
+      const DepartmentSchedule = require('../models/DepartmentSchedule');
+      const schedule = DepartmentSchedule.getEffectiveSchedule
+        ? await DepartmentSchedule.getEffectiveSchedule(employee.department, start)
+        : null;
+      const workingDaysOfWeek = DepartmentSchedule.getWorkingDaysForSchedule
+        ? DepartmentSchedule.getWorkingDaysForSchedule(schedule, employee.department)
+        : [1, 2, 3, 4, 5, 6];
+      const holidaysList = (DepartmentSchedule.getHolidaysForSchedule
+        ? DepartmentSchedule.getHolidaysForSchedule(schedule)
+        : []).map(h => String(h).slice(0, 10));
+
+      let workingDaysCount = 0;
+      const curr = new Date(start);
+      while (curr <= end) {
+        const dayOfWeek = curr.getDay();
+        const y = curr.getFullYear();
+        const m = String(curr.getMonth() + 1).padStart(2, '0');
+        const d = String(curr.getDate()).padStart(2, '0');
+        const dKey = `${y}-${m}-${d}`;
+
+        if (workingDaysOfWeek.includes(dayOfWeek) && !holidaysList.includes(dKey)) {
+          workingDaysCount++;
+        }
+        curr.setDate(curr.getDate() + 1);
+      }
+
+      const calendarDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+      const calculatedWorkingDays = workingDaysCount > 0 ? workingDaysCount : Math.max(1, calendarDiff);
+      totalDays = calculatedWorkingDays;
+      duration = calculatedWorkingDays;
+    }
+
     // Check for overlapping pending or approved leave requests
-    const overlapping = await Leave.findOne({
+    const activeLeaves = await Leave.find({
       employee: employee._id,
       status: { $in: ['PENDING', 'APPROVED'] },
-      $or: [
-        { startDate: { $lte: end }, endDate: { $gte: start } }
-      ]
+      startDate: { $lte: end },
+      endDate: { $gte: start }
     });
 
-    if (overlapping) {
-      throw new AppError(
-        `You already have an active leave request (${overlapping.status}) overlapping with this date period`,
-        409
-      );
+    for (const existing of activeLeaves) {
+      const isExistingHalf = existing.durationType === 'HALF_DAY';
+      const isNewHalf = normalizedDurationType === 'HALF_DAY';
+
+      if (!isExistingHalf || !isNewHalf) {
+        throw new AppError(
+          `You already have an active leave request (${existing.status}) overlapping with this date period`,
+          409
+        );
+      }
+
+      // Both are HALF_DAY: conflict only if on the exact same date and same session
+      const existingDateStr = new Date(existing.startDate).toISOString().slice(0, 10);
+      const newDateStr = start.toISOString().slice(0, 10);
+      if (existingDateStr === newDateStr && existing.halfDaySession === normalizedHalfDaySession) {
+        throw new AppError(
+          `You already have an active ${existing.halfDaySession} half-day leave request (${existing.status}) for this date`,
+          409
+        );
+      }
     }
 
     const normalizedLeaveType = normalizeLeaveType(leaveType);
@@ -835,6 +910,10 @@ class StaffService {
     const leave = new Leave({
       employee: employee._id,
       leaveType: normalizedLeaveType,
+      durationType: normalizedDurationType,
+      halfDaySession: normalizedHalfDaySession,
+      totalDays,
+      duration,
       startDate: start,
       endDate: end,
       reason,

@@ -218,7 +218,10 @@ class PayrollService {
         const monthPadded = String(month).padStart(2, '0');
         const dayPadded = String(day).padStart(2, '0');
         const dKey = `${year}-${monthPadded}-${dayPadded}`;
-        leavesByDate.set(dKey, leave);
+        if (!leavesByDate.has(dKey)) {
+          leavesByDate.set(dKey, []);
+        }
+        leavesByDate.get(dKey).push(leave);
       }
     }
 
@@ -229,8 +232,19 @@ class PayrollService {
 
     for (const [dKey, attRecord] of attendanceByDate.entries()) {
       if (leavesByDate.has(dKey)) {
+        const leavesList = leavesByDate.get(dKey);
+        const totalLeaveWeight = leavesList.reduce((sum, l) => sum + ((l.durationType === 'HALF_DAY' || l.totalDays === 0.5) ? 0.5 : 1.0), 0);
+        const isAttHalf = (attRecord.status || '').toUpperCase() === 'HALF_DAY';
+
+        // An attendance and leave on the same date is a conflict UNLESS:
+        // Attendance is HALF_DAY and total leave on that date is 0.5 (HALF_DAY), which complement each other into a full day.
+        const isComplementary = isAttHalf && totalLeaveWeight === 0.5;
+        if (isComplementary) {
+          continue;
+        }
+
         conflictDateKeys.add(dKey);
-        const leaveRecord = leavesByDate.get(dKey);
+        const leaveRecord = leavesList[0];
 
         // Find or create PayrollConflict document
         let conflictDoc = await PayrollConflict.findOne({
@@ -316,7 +330,7 @@ class PayrollService {
     let approvedUnpaidLeaveDays = 0;
     let totalApprovedLeaveDays = 0;
 
-    for (const [dKey, leaveRecord] of leavesByDate.entries()) {
+    for (const [dKey, leavesList] of leavesByDate.entries()) {
       const parts = dKey.split('-').map(Number);
       const dt = new Date(parts[0], parts[1] - 1, parts[2]);
       const dayOfWeek = dt.getDay();
@@ -325,50 +339,56 @@ class PayrollService {
       const isWorkingDay = workingDaysOfWeek.includes(dayOfWeek) && !holidaysList.includes(dKey);
       if (!isWorkingDay) continue;
 
-      if (conflictDateKeys.has(dKey)) {
-        const conflict = conflictsList.find(c => c.date === dKey);
+      for (const leaveRecord of leavesList) {
+        const leaveDayWeight = (leaveRecord.durationType === 'HALF_DAY' || Number(leaveRecord.totalDays) === 0.5) ? 0.5 : 1.0;
 
-        // If conflict is resolved as PRESENT:
-        // - Counted under attendance (presentDays)
-        // - Excluded from approved leave count (removed from remaining leaves)
-        // - Must NOT consume paid leave allowance
-        // - Must NOT be counted as a separate leave day
-        if (conflict && conflict.status === 'RESOLVED' && conflict.resolution?.decision === 'PRESENT') {
-          continue;
-        }
+        if (conflictDateKeys.has(dKey)) {
+          const conflict = conflictsList.find(c => c.date === dKey);
 
-        // Only count towards paid/unpaid leave breakdown if resolved as leave
-        if (conflict && conflict.status === 'RESOLVED') {
-          totalApprovedLeaveDays++;
-          if (conflict.resolution?.decision === 'PAID_LEAVE') {
-            eligiblePaidLeaveDaysCount++;
-            if (eligiblePaidLeaveDaysCount <= paidLeaveAllowance) {
-              approvedPaidLeaveDays++;
-            } else {
-              approvedUnpaidLeaveDays++;
-            }
-          } else if (conflict.resolution?.decision === 'UNPAID_LEAVE') {
-            approvedUnpaidLeaveDays++;
+          // If conflict is resolved as PRESENT:
+          // - Counted under attendance (presentDays)
+          // - Excluded from approved leave count (removed from remaining leaves)
+          // - Must NOT consume paid leave allowance
+          // - Must NOT be counted as a separate leave day
+          if (conflict && conflict.status === 'RESOLVED' && conflict.resolution?.decision === 'PRESENT') {
+            continue;
           }
+
+          // Only count towards paid/unpaid leave breakdown if resolved as leave
+          if (conflict && conflict.status === 'RESOLVED') {
+            totalApprovedLeaveDays += leaveDayWeight;
+            if (conflict.resolution?.decision === 'PAID_LEAVE') {
+              const remainingPaidAllowance = Math.max(0, paidLeaveAllowance - eligiblePaidLeaveDaysCount);
+              const paidPortion = Math.min(leaveDayWeight, remainingPaidAllowance);
+              const unpaidPortion = leaveDayWeight - paidPortion;
+
+              approvedPaidLeaveDays += paidPortion;
+              approvedUnpaidLeaveDays += unpaidPortion;
+              eligiblePaidLeaveDaysCount += leaveDayWeight;
+            } else if (conflict.resolution?.decision === 'UNPAID_LEAVE') {
+              approvedUnpaidLeaveDays += leaveDayWeight;
+            }
+            continue;
+          }
+
+          // Unresolved conflicts: excluded from payable leave breakdown until resolved by HR,
+          // but counted in totalApprovedLeaveDays as an approved leave request pending resolution
+          totalApprovedLeaveDays += leaveDayWeight;
           continue;
         }
 
-        // Unresolved conflicts: excluded from payable leave breakdown until resolved by HR,
-        // but counted in totalApprovedLeaveDays as an approved leave request pending resolution
-        totalApprovedLeaveDays++;
-        continue;
-      }
+        totalApprovedLeaveDays += leaveDayWeight;
 
-      totalApprovedLeaveDays++;
-
-      if ((leaveRecord.leaveType || '').toUpperCase() === 'UNPAID') {
-        approvedUnpaidLeaveDays++;
-      } else {
-        eligiblePaidLeaveDaysCount++;
-        if (eligiblePaidLeaveDaysCount <= paidLeaveAllowance) {
-          approvedPaidLeaveDays++;
+        if ((leaveRecord.leaveType || '').toUpperCase() === 'UNPAID') {
+          approvedUnpaidLeaveDays += leaveDayWeight;
         } else {
-          approvedUnpaidLeaveDays++;
+          const remainingPaidAllowance = Math.max(0, paidLeaveAllowance - eligiblePaidLeaveDaysCount);
+          const paidPortion = Math.min(leaveDayWeight, remainingPaidAllowance);
+          const unpaidPortion = leaveDayWeight - paidPortion;
+
+          approvedPaidLeaveDays += paidPortion;
+          approvedUnpaidLeaveDays += unpaidPortion;
+          eligiblePaidLeaveDaysCount += leaveDayWeight;
         }
       }
     }
