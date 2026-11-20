@@ -499,6 +499,8 @@ async function run() {
     assert.strictEqual(payrollRes.approvedLeaves, 1.5, 'Total approved leaves must be 1.5 days (three 0.5 half-days)');
     assert.strictEqual(payrollRes.approvedPaidLeaveDays, 1.0, 'Approved paid leave days must be capped at 1.0 day');
     assert.strictEqual(payrollRes.approvedUnpaidLeaveDays, 0.5, 'Approved unpaid leave days must be exactly 0.5 day');
+    assert.strictEqual(payrollRes.paidLeaveAllowance, 1.0, 'Monthly paid leave allowance remains one day');
+    assert.strictEqual(payrollRes.paidLeaveDaysConsumed, 1.0, 'Two half-day leaves consume one paid leave day');
     pass('Half-day leaves properly consume paid allowance (1.0 paid, 0.5 unpaid)');
 
     // Verify complementary attendance + leave:
@@ -513,13 +515,18 @@ async function run() {
     // Paid leave = 1.0 (Nov 10 morning + Nov 11 afternoon)
     // Total payable days = 0.5 + 1.0 = 1.5 days
     assert.strictEqual(payrollRes.payableDays, 1.5, 'Payable days must be exactly 1.5 (0.5 worked + 1.0 paid leave)');
+    assert.strictEqual(payrollRes.calendarDays, 30, 'Calendar day count is exposed for November');
+    assert.strictEqual(payrollRes.workingDays, payrollRes.scheduledWorkingDays, 'Working days alias matches configured schedule');
+    assert.strictEqual(payrollRes.totalPresentDays, 0.5, 'Total present attendance preserves the half-day fraction');
     // Daily rate = 60,000 / 21 = 2857.142857...
     // Net salary = 1.5 * (60,000 / 21) = 4285.71
     const expectedDailyRate = 60000 / payrollRes.scheduledWorkingDays;
     const expectedNetSalary = Math.round(expectedDailyRate * 1.5 * 100) / 100;
     const expectedDeductions = Math.round((60000 - expectedNetSalary) * 100) / 100;
     assert.strictEqual(payrollRes.netSalary, expectedNetSalary, `Net salary for 1.5 payable days must be ₹${expectedNetSalary}`);
+    assert.strictEqual(payrollRes.netPayoutAmount, expectedNetSalary, 'Net payout API alias matches calculated salary');
     assert.strictEqual(payrollRes.deductions, expectedDeductions, `Deductions must equal ₹${expectedDeductions} without double deductions`);
+    assert.strictEqual(payrollRes.lopDeduction, expectedDeductions, 'LOP deduction field matches the existing total deduction calculation');
     pass('Payroll net pay and deductions calculate with fractional half-day accuracy without double deductions');
 
     console.log('\n--- TEST GROUP 7: Medical Document Multipart Submission with Full & Half-Day ---');

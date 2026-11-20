@@ -17,6 +17,15 @@ function isWfhWorkMode(workMode) {
   return normalized === 'WFH' || normalized === 'WORKFROMHOME';
 }
 
+function getLeaveDayWeight(leave) {
+  // Older leave documents do not have durationType. Treat those as full days.
+  // For a half-day request, durationType is authoritative; totalDays/duration
+  // are retained as fallbacks for records created before the current schema.
+  if (leave?.durationType === 'HALF_DAY') return 0.5;
+  const calculatedDuration = Number(leave?.totalDays ?? leave?.duration);
+  return calculatedDuration === 0.5 ? 0.5 : 1;
+}
+
 /**
  * Normalizes date to 'YYYY-MM-DD' in Asia/Kolkata timezone or UTC
  */
@@ -171,6 +180,11 @@ class PayrollService {
 
     const calendar = this.getDepartmentMonthCalendar(year, month, employee.department, schedule);
     const { scheduledWorkingDays, weeklyOffs, holidays, workingDaysOfWeek, holidaysList } = calendar;
+    const isScheduledWorkDate = (dateKey) => {
+      const [dateYear, dateMonth, dateDay] = dateKey.split('-').map(Number);
+      const weekday = new Date(dateYear, dateMonth - 1, dateDay).getDay();
+      return workingDaysOfWeek.includes(weekday) && !holidaysList.includes(dateKey);
+    };
 
     // 2. Query attendance records for the month
     const attendanceRecords = await Attendance.find({
@@ -231,9 +245,10 @@ class PayrollService {
     const conflictDateKeys = new Set();
 
     for (const [dKey, attRecord] of attendanceByDate.entries()) {
+      if (!isScheduledWorkDate(dKey)) continue;
       if (leavesByDate.has(dKey)) {
         const leavesList = leavesByDate.get(dKey);
-        const totalLeaveWeight = leavesList.reduce((sum, l) => sum + ((l.durationType === 'HALF_DAY' || l.totalDays === 0.5) ? 0.5 : 1.0), 0);
+        const totalLeaveWeight = leavesList.reduce((sum, leave) => sum + getLeaveDayWeight(leave), 0);
         const isAttHalf = (attRecord.status || '').toUpperCase() === 'HALF_DAY';
 
         // An attendance and leave on the same date is a conflict UNLESS:
@@ -293,6 +308,7 @@ class PayrollService {
     let wfhDays = 0;
 
     for (const [dKey, attRecord] of attendanceByDate.entries()) {
+      if (!isScheduledWorkDate(dKey)) continue;
       if (conflictDateKeys.has(dKey)) {
         // Only count if resolved as PRESENT
         const conflict = conflictsList.find(c => c.date === dKey);
@@ -331,16 +347,11 @@ class PayrollService {
     let totalApprovedLeaveDays = 0;
 
     for (const [dKey, leavesList] of leavesByDate.entries()) {
-      const parts = dKey.split('-').map(Number);
-      const dt = new Date(parts[0], parts[1] - 1, parts[2]);
-      const dayOfWeek = dt.getDay();
-
       // Only evaluate leaves on scheduled working days (weekly offs are not working days)
-      const isWorkingDay = workingDaysOfWeek.includes(dayOfWeek) && !holidaysList.includes(dKey);
-      if (!isWorkingDay) continue;
+      if (!isScheduledWorkDate(dKey)) continue;
 
       for (const leaveRecord of leavesList) {
-        const leaveDayWeight = (leaveRecord.durationType === 'HALF_DAY' || Number(leaveRecord.totalDays) === 0.5) ? 0.5 : 1.0;
+        const leaveDayWeight = getLeaveDayWeight(leaveRecord);
 
         if (conflictDateKeys.has(dKey)) {
           const conflict = conflictsList.find(c => c.date === dKey);
@@ -398,7 +409,14 @@ class PayrollService {
     // Net Salary = Daily Salary * Payable Days
     // 0 payable days = ₹0 salary!
     const grossSalary = employee.salary || 0;
-    const payableDays = presentDays + wfhDays + approvedPaidLeaveDays + holidays;
+    // Attendance is payable only on scheduled workdays. Calendar holidays are
+    // already payable independently, and attendance on the same holiday must
+    // not create a second payable day.
+    const presentAttendanceDays = presentDays + wfhDays;
+    const payableDays = Math.min(
+      scheduledWorkingDays + holidays,
+      presentAttendanceDays + approvedPaidLeaveDays + holidays
+    );
     const dailyRatePrecise = scheduledWorkingDays > 0 ? (grossSalary / scheduledWorkingDays) : 0;
     const dailySalary = Math.round(dailyRatePrecise * 100) / 100;
 
@@ -432,17 +450,22 @@ class PayrollService {
       year,
       month,
       // Calendar breakdown
+      calendarDays: daysInMonth,
       scheduledWorkingDays,
+      workingDays: scheduledWorkingDays,
       standardWorkingDays: scheduledWorkingDays, // backward compatibility
       weeklyOffs,
       holidays,
       // Attendance breakdown
       presentDays,
+      totalPresentDays: presentAttendanceDays,
       halfDays,
       wfhDays,
       // Leave breakdown
       approvedLeaves: totalApprovedLeaveDays, // backward compatibility
       approvedPaidLeaveDays,
+      paidLeaveAllowance,
+      paidLeaveDaysConsumed: Math.min(eligiblePaidLeaveDaysCount, paidLeaveAllowance),
       paidLeaveDays: approvedPaidLeaveDays, // backward compatibility
       approvedUnpaidLeaveDays,
       unpaidLeaveDays: approvedUnpaidLeaveDays, // backward compatibility
@@ -458,8 +481,10 @@ class PayrollService {
       grossPayableSalary: grossSalary,
       dailySalary,
       dailyRate: dailySalary, // backward compatibility
+      lopDeduction: deductions,
       deductions,
       netSalary: netPay,
+      netPayoutAmount: netPay,
       netPay // backward compatibility
     };
   }
