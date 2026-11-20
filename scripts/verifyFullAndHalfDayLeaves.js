@@ -13,17 +13,58 @@ const { app } = require('../server');
 let server;
 let serverPort;
 
+function buildMultipart(fields, fileField) {
+  const boundary = `---VerifyBoundary${Date.now()}`;
+  const crlf = '\r\n';
+  const parts = [];
+
+  for (const [name, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== null) {
+      parts.push(Buffer.from(
+        `--${boundary}${crlf}` +
+        `Content-Disposition: form-data; name="${name}"${crlf}${crlf}` +
+        `${value}${crlf}`
+      ));
+    }
+  }
+
+  if (fileField) {
+    parts.push(Buffer.from(
+      `--${boundary}${crlf}` +
+      `Content-Disposition: form-data; name="${fileField.fieldName}"; filename="${fileField.filename}"${crlf}` +
+      `Content-Type: application/pdf${crlf}${crlf}`
+    ));
+    parts.push(Buffer.isBuffer(fileField.data) ? fileField.data : Buffer.from(fileField.data));
+    parts.push(Buffer.from(crlf));
+  }
+
+  parts.push(Buffer.from(`--${boundary}--${crlf}`));
+  const payload = Buffer.concat(parts);
+
+  return {
+    payload,
+    headers: {
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': payload.length
+    }
+  };
+}
+
 function makeRequest(method, path, headers = {}, body = null) {
   return new Promise((resolve, reject) => {
     const reqHeaders = { ...headers };
     let postData = null;
 
     if (body) {
-      postData = typeof body === 'string' ? body : JSON.stringify(body);
-      if (!reqHeaders['Content-Type']) {
-        reqHeaders['Content-Type'] = 'application/json';
+      if (Buffer.isBuffer(body)) {
+        postData = body;
+      } else {
+        postData = typeof body === 'string' ? body : JSON.stringify(body);
+        if (!reqHeaders['Content-Type']) {
+          reqHeaders['Content-Type'] = 'application/json';
+        }
       }
-      reqHeaders['Content-Length'] = Buffer.byteLength(postData);
+      reqHeaders['Content-Length'] = Buffer.isBuffer(postData) ? postData.length : Buffer.byteLength(postData);
     }
 
     const req = http.request(
@@ -480,6 +521,61 @@ async function run() {
     assert.strictEqual(payrollRes.netSalary, expectedNetSalary, `Net salary for 1.5 payable days must be ₹${expectedNetSalary}`);
     assert.strictEqual(payrollRes.deductions, expectedDeductions, `Deductions must equal ₹${expectedDeductions} without double deductions`);
     pass('Payroll net pay and deductions calculate with fractional half-day accuracy without double deductions');
+
+    console.log('\n--- TEST GROUP 7: Medical Document Multipart Submission with Full & Half-Day ---');
+
+    // 7.1: Submit Half-Day MEDICAL leave via multipart form-data
+    const fakePdf = Buffer.from('%PDF-1.4 test medical certificate buffer content');
+    const multipartData = buildMultipart(
+      {
+        leaveType: 'MEDICAL',
+        durationType: 'HALF_DAY',
+        halfDaySession: 'FORENOON',
+        startDate: '2026-12-22',
+        endDate: '2026-12-22',
+        reason: 'Hospital visit in morning session'
+      },
+      {
+        fieldName: 'document',
+        filename: 'medical_cert_halfday.pdf',
+        data: fakePdf
+      }
+    );
+
+    const medRes = await makeRequest(
+      'POST',
+      '/api/staff/leaves',
+      {
+        Authorization: `Bearer ${techToken}`,
+        ...multipartData.headers
+      },
+      multipartData.payload
+    );
+
+    assert.strictEqual(medRes.statusCode, 201, `Multipart half-day medical leave should return 201 Created: ${JSON.stringify(medRes.body)}`);
+    const medLeave = medRes.body?.data?.leave || medRes.body?.data;
+    assert.strictEqual(medLeave.leaveType, 'MEDICAL');
+    assert.strictEqual(medLeave.durationType, 'HALF_DAY');
+    assert.strictEqual(medLeave.halfDaySession, 'FORENOON');
+    assert.strictEqual(medLeave.totalDays, 0.5);
+    assert.strictEqual(medLeave.isHalfDay, true);
+    assert.ok(medLeave.documentUrl || medLeave.documentId || medLeave.document, 'Medical document must be attached');
+    const createdMedLeaveId = medLeave.id || medLeave._id || medLeave.leaveId;
+    pass('Multipart submission of HALF_DAY Medical leave with PDF succeeds with attached document');
+
+    // 7.2: HR detail endpoint retrieves half-day medical leave with document metadata intact
+    const hrMedDetail = await makeRequest(
+      'GET',
+      `/api/hr/leaves/${createdMedLeaveId}`,
+      { Authorization: `Bearer ${hrToken}` }
+    );
+    assert.strictEqual(hrMedDetail.statusCode, 200);
+    const hrLeave = hrMedDetail.body?.data?.leave || hrMedDetail.body?.data;
+    assert.strictEqual(hrLeave.durationType, 'HALF_DAY');
+    assert.strictEqual(hrLeave.halfDaySession, 'FORENOON');
+    assert.strictEqual(hrLeave.totalDays, 0.5);
+    assert.ok(hrLeave.documentUrl || hrLeave.document, 'HR can access attached medical document');
+    pass('HR detail endpoint returns complete half-day fields and accessible document proof');
 
     console.log('\n================================================================');
     console.log('   ALL FULL-DAY & HALF-DAY LEAVE TESTS PASSED (100%)');
