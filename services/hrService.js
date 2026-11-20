@@ -2110,6 +2110,55 @@ return {
       modifications
     };
   }
+
+  /**
+   * Get count of employees who have checked out today (or on a given dateKey)
+   * Matching timezone logic (Asia/Kolkata) from getDayBounds / attendanceDashboardMetrics.
+   */
+  async getCheckedOutAttendance(dateKey = null) {
+    const { startOfDay, endOfDay } = getDayBounds(dateKey);
+
+    const activeEmployees = await Employee.find({
+      status: 'ACTIVE',
+      isDeleted: { $ne: true }
+    }).select('_id').lean();
+    const activeIds = new Set(activeEmployees.map(e => String(e._id)));
+
+    const rows = await Attendance.find({
+      $and: [
+        {
+          $or: [
+            { date: { $gte: startOfDay, $lte: endOfDay } },
+            { checkOut: { $gte: startOfDay, $lte: endOfDay } }
+          ]
+        },
+        {
+          $or: [
+            { checkOut: { $ne: null } },
+            { checkOutTime: { $ne: null } },
+            { status: { $regex: /^checked[\s_-]?out$/i } }
+          ]
+        }
+      ]
+    }).select('employee checkOut checkOutTime status').lean();
+
+    const checkedOutEmpIds = new Set();
+    for (const row of rows) {
+      const empId = row.employee?._id ? String(row.employee._id) : (row.employee ? String(row.employee) : null);
+      if (empId) {
+        if (activeIds.size === 0 || activeIds.has(empId)) {
+          checkedOutEmpIds.add(empId);
+        }
+      }
+    }
+
+    const count = checkedOutEmpIds.size;
+    return {
+      count,
+      checkedOutCount: count,
+      date: dateKey || getDateKey(new Date(), 'Asia/Kolkata')
+    };
+  }
 }
 
 module.exports = new HRService();
