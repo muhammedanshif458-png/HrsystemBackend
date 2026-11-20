@@ -50,20 +50,36 @@ const allowedOrigins = Array.from(new Set([
   ...configuredOrigins
 ]));
 
+// Helper: Checks if origin is any loopback interface on ANY port (localhost, 127.0.0.1, [::1])
+const isLocalhostOrigin = (origin) => {
+  if (!origin || typeof origin !== 'string') return false;
+  const normalized = origin.trim().replace(/\/+$/, '');
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(normalized);
+};
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser requests with no origin (e.g. curl, Postman, server-to-server)
+    // 1. Allow non-browser requests with no origin (e.g. curl, Postman, server-to-server, mobile native)
     if (!origin) {
       return callback(null, true);
     }
     const normalized = String(origin).trim().replace(/\/+$/, '');
-    if (allowedOrigins.includes(normalized)) {
+
+    // 2. Unconditionally allow any port on localhost, 127.0.0.1, or IPv6 [::1]
+    if (isLocalhostOrigin(normalized)) {
       return callback(null, true);
     }
-    // In development mode, also allow any local port on localhost, 127.0.0.1, or IPv6 [::1]
-    if (!env.isProduction && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(normalized)) {
+
+    // 3. Allow if wildcard is configured or origin matches allowed list
+    if (env.clientUrl === '*' || allowedOrigins.includes(normalized) || allowedOrigins.includes('*')) {
       return callback(null, true);
     }
+
+    // 4. In non-production environments, default to permissive for local developer tooling
+    if (!env.isProduction) {
+      return callback(null, true);
+    }
+
     return callback(null, false);
   },
   credentials: true,
