@@ -66,6 +66,8 @@ router.get('/documents/:docId/download', documentController.downloadDocument);
 
 // Attendance
 router.get('/attendance', hrController.getAttendance);
+router.get('/attendance/checked-out', hrController.getCheckedOutAttendance);
+router.get('/attendance/checked-out/count', hrController.getCheckedOutAttendance);
 router.post('/attendance/reclassify', hrController.reclassifyHistoricalAttendance);
 router.get('/attendance/:employeeId', hrController.getAttendanceByEmployeeId);
 

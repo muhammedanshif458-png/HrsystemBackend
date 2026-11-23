@@ -450,6 +450,27 @@ class HRController {
       next(err);
     }
   }
+
+  /**
+   * GET /api/hr/attendance/checked-out
+   * GET /api/hr/attendance/checked-out/count
+   */
+  async getCheckedOutAttendance(req, res, next) {
+    try {
+      const result = await hrService.getCheckedOutAttendance(req.query.date);
+      return res.status(200).json({
+        success: true,
+        message: 'Checked-out attendance count fetched successfully',
+        count: result.count,
+        data: {
+          count: result.count,
+          checkedOutCount: result.count
+        }
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new HRController();
