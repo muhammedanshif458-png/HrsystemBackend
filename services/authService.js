@@ -71,6 +71,13 @@ class AuthService {
       throw new AppError('Invalid email or password', 401);
     }
 
+    // The schema constrains normal writes, but legacy or direct database
+    // updates can still leave an unsupported role on an account. Do not issue
+    // tokens for roles the application does not recognize.
+    if (!['HR', 'STAFF', 'SUPER_ADMIN'].includes(user.role)) {
+      throw new AppError('Your account role is not authorized to sign in.', 403);
+    }
+
     const location = loginContext.location;
     const workMode = loginContext.workMode || null;
 
