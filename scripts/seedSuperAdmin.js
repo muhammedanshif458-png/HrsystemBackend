@@ -29,13 +29,24 @@ async function restoreSuperAdminAccount({
   }
 
   // 1. Validate Target User
-  const existingUser = await User.findOne({ email: targetEmail }).select('+password');
+  let existingUser = await User.findOne({ email: targetEmail }).select('+password');
   if (!existingUser) {
-    throw new Error(`Restoration aborted: Target User not found with email '${targetEmail}'.`);
+    logger.info(`Target User not found with email '${targetEmail}'. Creating Super Admin User...`);
+    existingUser = new User({
+      firstName: 'Super',
+      lastName: 'Admin',
+      email: targetEmail,
+      phone: '+1234567899',
+      password: newPassword || env.seedSuperAdmin?.password || 'hrAdmin',
+      role: 'SUPER_ADMIN',
+      isActive: true
+    });
+    await existingUser.save();
+    logger.info(`Super Admin User created with email: ${targetEmail}`);
   }
 
   // 2. Validate Target Employee
-  const existingEmployee = await Employee.findOne({
+  let existingEmployee = await Employee.findOne({
     $or: [
       { employeeId: targetEmployeeId.toUpperCase() },
       { user: existingUser._id },
@@ -44,7 +55,22 @@ async function restoreSuperAdminAccount({
   });
 
   if (!existingEmployee) {
-    throw new Error(`Restoration aborted: Target Employee profile not found for email '${targetEmail}' or ID '${targetEmployeeId}'.`);
+    logger.info(`Target Employee profile not found for email '${targetEmail}'. Creating Super Admin Employee profile...`);
+    existingEmployee = new Employee({
+      employeeId: targetEmployeeId.toUpperCase(),
+      user: existingUser._id,
+      firstName: existingUser.firstName || 'Super',
+      lastName: existingUser.lastName || 'Admin',
+      email: targetEmail,
+      phone: existingUser.phone || '+1234567899',
+      department: 'Management',
+      designation: 'Super Administrator',
+      employmentType: 'FULL_TIME',
+      status: 'ACTIVE',
+      gender: 'OTHER'
+    });
+    await existingEmployee.save();
+    logger.info(`Super Admin Employee profile created with Employee ID: ${targetEmployeeId.toUpperCase()}`);
   }
 
   // Double check that employeeId matches
@@ -263,7 +289,8 @@ const seedSuperAdmin = async () => {
 
     const adminPassword = (
       process.env.SEED_SUPER_ADMIN_PASSWORD ||
-      env.seedSuperAdmin?.password
+      env.seedSuperAdmin?.password ||
+      'hrAdmin'
     );
 
     const isRestoreRequested =
@@ -291,47 +318,39 @@ const seedSuperAdmin = async () => {
     }
 
     // ── Standard Seed Mode ──
-    const existingUser = await User.findOne({ email: adminEmail });
+    const existingUser = await User.findOne({ email: adminEmail }).select('+password');
 
     let superAdminUser;
 
     if (existingUser) {
-      if (!isResetPasswordRequested && !isForceRequested) {
-        if (!existingUser.isActive) {
-          logger.warn(
-            `Super Admin account exists with email: ${existingUser.email} (Role: ${existingUser.role}) but is currently DEACTIVATED (isActive: false).`
-          );
-          logger.warn(
-            'To safely restore this account without altering password, run: node scripts/seedSuperAdmin.js --restore-super-admin'
-          );
-        } else {
-          logger.info(
-            `Super Admin account already exists with email: ${existingUser.email} (Role: ${existingUser.role}, Active: ${existingUser.isActive}).`
-          );
-        }
-        logger.info(
-          'Skipping seed to prevent silent overwrites. Run with --restore-super-admin to restore, or --reset-password to reset.'
-        );
-        await disconnectDB();
-        process.exit(0);
-      }
+      const passwordMatches = await existingUser.comparePassword(adminPassword);
+      const isAlreadyFullyConfigured =
+        existingUser.role === 'SUPER_ADMIN' &&
+        existingUser.isActive === true &&
+        passwordMatches &&
+        !isResetPasswordRequested &&
+        !isForceRequested;
 
-      logger.info(`Explicit update requested. Updating Super Admin account for ${adminEmail}...`);
-      if (!adminPassword) {
-        throw new Error('SEED_SUPER_ADMIN_PASSWORD is required in the environment to reset password.');
+      if (isAlreadyFullyConfigured) {
+        logger.info(
+          `Super Admin account already exists, active, with role SUPER_ADMIN and matching credentials (${existingUser.email}).`
+        );
+        superAdminUser = existingUser;
+      } else {
+        logger.info(`Ensuring Super Admin account state and credentials for ${adminEmail}...`);
+        if (isResetPasswordRequested || !passwordMatches) {
+          existingUser.password = adminPassword; // Triggers pre-save bcrypt hash
+          logger.info(`Password updated/aligned for ${adminEmail}.`);
+        }
+        existingUser.role = 'SUPER_ADMIN';
+        existingUser.isActive = true;
+        existingUser.firstName = existingUser.firstName || 'Super';
+        existingUser.lastName = existingUser.lastName || 'Admin';
+        await existingUser.save();
+        superAdminUser = existingUser;
+        logger.info(`Super Admin account (${adminEmail}) ensured active with role SUPER_ADMIN.`);
       }
-      existingUser.password = adminPassword; // Triggers pre-save bcrypt hash
-      existingUser.role = 'SUPER_ADMIN';
-      existingUser.isActive = true;
-      existingUser.firstName = existingUser.firstName || 'Super';
-      existingUser.lastName = existingUser.lastName || 'Admin';
-      await existingUser.save();
-      superAdminUser = existingUser;
-      logger.info(`Super Admin account (${adminEmail}) updated successfully with role SUPER_ADMIN.`);
     } else {
-      if (!adminPassword) {
-        throw new Error('SEED_SUPER_ADMIN_PASSWORD is required in the environment to seed the Super Admin account.');
-      }
       logger.info(`Creating new Super Admin account for ${adminEmail}...`);
       superAdminUser = new User({
         firstName: 'Super',
@@ -370,19 +389,14 @@ const seedSuperAdmin = async () => {
       await superAdminEmployee.save();
       logger.info('Super Admin Employee profile created with Employee ID: SA0001');
     } else {
-      if (isResetPasswordRequested || isForceRequested) {
-        existingEmployee.isDeleted = false;
-        existingEmployee.deletedAt = null;
-        existingEmployee.status = 'ACTIVE';
-      }
-      if (!existingEmployee.user) {
+      existingEmployee.isDeleted = false;
+      existingEmployee.deletedAt = null;
+      existingEmployee.status = 'ACTIVE';
+      if (!existingEmployee.user || existingEmployee.user.toString() !== superAdminUser._id.toString()) {
         existingEmployee.user = superAdminUser._id;
-        await existingEmployee.save();
-        logger.info('Linked existing Employee profile to Super Admin user.');
-      } else {
-        await existingEmployee.save();
-        logger.info(`Employee profile already linked with Employee ID: ${existingEmployee.employeeId}`);
       }
+      await existingEmployee.save();
+      logger.info(`Employee profile active and linked with Employee ID: ${existingEmployee.employeeId}`);
     }
 
     logger.info('=== Super Admin Seed Completed Successfully ===');

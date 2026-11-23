@@ -25,7 +25,7 @@ const makeReq = (options, postData = null) => {
 };
 
 const run = async () => {
-  console.log('--- Verifying Super Admin Live Endpoints (port 5000) ---');
+  console.log(`--- Verifying Super Admin Live Endpoints (port ${env.port}) ---`);
 
   const email = process.env.SEED_SUPER_ADMIN_EMAIL || env.seedSuperAdmin?.email || 'lysoftware@gmail.com';
   const password = process.env.SEED_SUPER_ADMIN_PASSWORD || env.seedSuperAdmin?.password || 'hrAdmin';

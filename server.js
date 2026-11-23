@@ -161,9 +161,10 @@ if (require.main === module) {
   connectDB()
     .then(() => {
       server.listen(env.port, '0.0.0.0', () => {
-        logger.info(`HR Management Server is running in [${env.nodeEnv}] mode on port ${env.port}`);
-        logger.info(`Health check available at http://localhost:${env.port}/api/health`);
-        logger.info(`Socket.IO real-time chat gateway active on port ${env.port}`);
+        const activePort = server.address()?.port ?? env.port;
+        logger.info(`HR Management Server is running in [${env.nodeEnv}] mode on port ${activePort}`);
+        logger.info(`Health check available at http://localhost:${activePort}/api/health`);
+        logger.info(`Socket.IO real-time chat gateway active on port ${activePort}`);
       });
     })
     .catch((err) => {

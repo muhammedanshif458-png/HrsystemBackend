@@ -1,5 +1,7 @@
 const http = require('http');
 
+const PORT = parseInt(process.env.PORT, 10) || 5000;
+
 const makeRequest = (method, path, headers = {}, body = null) => {
   return new Promise((resolve, reject) => {
     let postData = null;
@@ -12,7 +14,7 @@ const makeRequest = (method, path, headers = {}, body = null) => {
 
     const options = {
       hostname: '127.0.0.1',
-      port: 5000,
+      port: PORT,
       path,
       method,
       headers: reqHeaders
@@ -45,7 +47,7 @@ const makeRequest = (method, path, headers = {}, body = null) => {
 };
 
 const run = async () => {
-  console.log('Testing against live server running on port 5000...\n');
+  console.log(`Testing against live server running on port ${PORT}...\n`);
 
   // 1. Health check
   const health = await makeRequest('GET', '/api/health');

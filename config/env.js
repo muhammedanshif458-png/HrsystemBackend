@@ -4,8 +4,11 @@ const path = require('path');
 // Load environment variables from .env file
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
+const rawPort = parseInt(process.env.PORT, 10);
+const port = (!isNaN(rawPort) && rawPort >= 0) ? rawPort : 5000;
+
 const env = {
-  port: parseInt(process.env.PORT, 10) || 5000,
+  port,
   nodeEnv: process.env.NODE_ENV || 'development',
   isProduction: process.env.NODE_ENV === 'production',
   mongodbUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/hr_management',

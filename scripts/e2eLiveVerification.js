@@ -2,7 +2,8 @@ const http = require('http');
 const mongoose = require('mongoose');
 
 // Target server
-const BASE_URL = 'http://127.0.0.1:5000';
+const PORT = parseInt(process.env.PORT, 10) || 5000;
+const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 function request(method, path, body = null, token = null) {
   return new Promise((resolve, reject) => {

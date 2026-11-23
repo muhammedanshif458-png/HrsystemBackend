@@ -7,6 +7,8 @@ const Employee = require('../models/Employee');
 const DepartmentChatMessage = require('../models/DepartmentChatMessage');
 const { generateAccessToken } = require('../utils/jwt');
 
+const PORT = parseInt(process.env.PORT, 10) || env.port || 5000;
+
 function assert(condition, message) {
   if (!condition) {
     console.error(`  [FAIL] ${message}`);
@@ -16,7 +18,7 @@ function assert(condition, message) {
 }
 
 async function request(path, options = {}) {
-  const url = `http://localhost:5000${path}`;
+  const url = `http://localhost:${PORT}${path}`;
   const response = await fetch(url, {
     method: options.method || 'GET',
     headers: {
@@ -85,20 +87,20 @@ async function main() {
   assert(hrDeptGet.status === 200, 'GET /api/hr/departments/tech/messages returns 200 for SUPER_ADMIN');
 
   // 3. Connect Sockets
-  console.log('\n--- 2. Connecting Sockets to Live Server on Port 5000 ---');
-  const superAdminSocket = io('http://localhost:5000', {
+  console.log(`\n--- 2. Connecting Sockets to Live Server on Port ${PORT} ---`);
+  const superAdminSocket = io(`http://localhost:${PORT}`, {
     auth: { token: superAdminToken },
     transports: ['websocket'],
     timeout: 5000
   });
 
-  const techStaffSocket = io('http://localhost:5000', {
+  const techStaffSocket = io(`http://localhost:${PORT}`, {
     auth: { token: techStaffToken },
     transports: ['websocket'],
     timeout: 5000
   });
 
-  const teleStaffSocket = io('http://localhost:5000', {
+  const teleStaffSocket = io(`http://localhost:${PORT}`, {
     auth: { token: teleStaffToken },
     transports: ['websocket'],
     timeout: 5000

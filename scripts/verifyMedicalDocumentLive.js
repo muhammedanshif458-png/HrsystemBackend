@@ -2,11 +2,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+const PORT = parseInt(process.env.PORT, 10) || 5000;
+
 function request({ method, path: reqPath, headers = {}, body = null }) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: '127.0.0.1',
-      port: 5000,
+      port: PORT,
       path: reqPath,
       method,
       headers: { ...headers }

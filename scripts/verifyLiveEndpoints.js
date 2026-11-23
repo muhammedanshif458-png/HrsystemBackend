@@ -1,6 +1,6 @@
 const http = require('http');
 
-const PORT = 5000;
+const PORT = parseInt(process.env.PORT, 10) || 5000;
 const HOST = '127.0.0.1';
 
 function request(options, body = null) {
