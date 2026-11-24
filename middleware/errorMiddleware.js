@@ -41,16 +41,18 @@ const errorMiddleware = (err, req, res, next) => {
 
   // 2. Mongoose Duplicate Key Error (Code 11000)
   if (err.code === 11000) {
-    const field = Object.keys(err.keyValue || {})[0];
+    const field = Object.keys(err.keyValue || err.keyPattern || {})[0] || 'unknown';
     const value = err.keyValue ? err.keyValue[field] : '';
     let message = `Duplicate value '${value}' entered for field: ${field}.`;
 
     if (field === 'email') {
-      message = 'An account with this email address already exists.';
+      message = `An account or employee with email '${value || ''}' already exists (field: email).`;
     } else if (field === 'employeeId') {
-      message = 'An employee with this Employee ID already exists.';
+      message = `An employee with Employee ID '${value || ''}' already exists (field: employeeId).`;
+    } else if (field === 'user') {
+      message = 'This user account is already linked to another employee profile (field: user).';
     } else if (field === 'employee' || (err.keyPattern && err.keyPattern.employee && err.keyPattern.date)) {
-      message = 'Attendance record already exists for this employee on this date.';
+      message = 'Attendance record already exists for this employee on this date (field: employee).';
     }
 
     return sendError(res, message, null, 409);

@@ -295,19 +295,28 @@ return {
   const existingUser = await User.findOne({ email: normalizedEmail });
   const existingEmployee = await Employee.findOne({ email: normalizedEmail });
   if (existingEmployee) {
-    throw new AppError('An employee with this email address already exists', 409);
+    throw new AppError(`An employee with email '${normalizedEmail}' already exists (field: email)`, 409);
   }
 
-  // Auto-generate employeeId if not provided
+  // Auto-generate employeeId if not provided, ensuring no collision even after record deletions
   let employeeId = data.employeeId ? data.employeeId.toUpperCase().trim() : null;
   if (!employeeId) {
     const count = await Employee.countDocuments();
-    employeeId = `EMP${String(count + 1001).padStart(4, '0')}`;
-  }
-
-  const existingEmpId = await Employee.findOne({ employeeId });
-  if (existingEmpId) {
-    throw new AppError(`Employee ID '${employeeId}' is already in use`, 409);
+    let candidateNumber = count + 1001;
+    while (true) {
+      const candidateId = `EMP${String(candidateNumber).padStart(4, '0')}`;
+      const exists = await Employee.exists({ employeeId: candidateId });
+      if (!exists) {
+        employeeId = candidateId;
+        break;
+      }
+      candidateNumber++;
+    }
+  } else {
+    const existingEmpId = await Employee.findOne({ employeeId });
+    if (existingEmpId) {
+      throw new AppError(`Employee ID '${employeeId}' is already in use (field: employeeId)`, 409);
+    }
   }
 
   const finalPassword = (password && String(password).trim().length >= 6)
@@ -319,7 +328,7 @@ return {
     if (existingUser) {
       const linkedEmp = await Employee.findOne({ user: existingUser._id });
       if (linkedEmp) {
-        throw new AppError('An account with this email address already exists', 409);
+        throw new AppError(`A user account with email '${normalizedEmail}' is already linked to another employee (field: user)`, 409);
       }
       newUser = existingUser;
       newUser.firstName = firstName;
