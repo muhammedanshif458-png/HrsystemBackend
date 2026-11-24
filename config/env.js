@@ -4,14 +4,39 @@ const path = require('path');
 // Load environment variables from .env file
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-const rawPort = parseInt(process.env.PORT, 10);
-const port = (!isNaN(rawPort) && rawPort >= 0) ? rawPort : 5000;
+const isProduction = process.env.NODE_ENV === 'production';
+const rawPort = process.env.PORT ? Number(process.env.PORT) : NaN;
+
+if (isProduction) {
+  const requiredProductionVars = ['MONGODB_URI', 'JWT_SECRET', 'JWT_REFRESH_SECRET', 'PORT'];
+  const missingVars = requiredProductionVars.filter((key) => !process.env[key] || !process.env[key].trim());
+  if (missingVars.length) {
+    throw new Error(`Missing required production environment variables: ${missingVars.join(', ')}`);
+  }
+
+  let configuredMongoUrl;
+  try {
+    configuredMongoUrl = new URL(process.env.MONGODB_URI);
+  } catch (_) {
+    throw new Error('MONGODB_URI must be a valid MongoDB connection URL in production.');
+  }
+
+  const configuredDatabase = decodeURIComponent((configuredMongoUrl.pathname || '').replace(/^\/+/, '').split('/')[0] || '');
+  if (!['mongodb:', 'mongodb+srv:'].includes(configuredMongoUrl.protocol) || configuredDatabase !== 'hr_management') {
+    throw new Error('Production MONGODB_URI must select the hr_management database.');
+  }
+}
+
+if (process.env.PORT && (!Number.isInteger(rawPort) || rawPort < 1 || rawPort > 65535)) {
+  throw new Error('PORT must be a valid TCP port number.');
+}
+const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 5000;
 
 const env = {
   port,
   nodeEnv: process.env.NODE_ENV || 'development',
-  isProduction: process.env.NODE_ENV === 'production',
-  mongodbUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/hr_management',
+  isProduction,
+  mongodbUri: process.env.MONGODB_URI || (isProduction ? null : 'mongodb://127.0.0.1:27017/hr_management'),
   birthdayTimeZone: process.env.BIRTHDAY_TIMEZONE || 'Asia/Kolkata',
   
   jwt: {

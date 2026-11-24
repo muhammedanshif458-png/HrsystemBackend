@@ -12,7 +12,7 @@ mongoose.connection.on('reconnected', () => {
 });
 
 mongoose.connection.on('error', (err) => {
-  logger.error(`MongoDB runtime error: ${err.message}`, err);
+  logger.error(`MongoDB runtime error: ${err.name || 'Error'}${err.code ? ` (${err.code})` : ''}`);
 });
 
 const connectDB = async (customUri = null) => {
@@ -23,7 +23,7 @@ const connectDB = async (customUri = null) => {
     logger.info(`MongoDB Connected successfully: Host=${conn.connection.host}, Database=${conn.connection.name}`);
     return conn;
   } catch (error) {
-    logger.error(`MongoDB connection error: ${error.message}`, error);
+    logger.error(`MongoDB connection failed: ${error.name || 'Error'}${error.code ? ` (${error.code})` : ''}`);
     if (!customUri) {
       // Exit process with failure in normal server start if DB connection fails
       process.exit(1);

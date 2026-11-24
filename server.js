@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const http = require('http');
+const mongoose = require('mongoose');
 const socketService = require('./services/socketService');
 
 // 1. Load environment variables
@@ -133,9 +134,20 @@ app.use('/uploads', (req, res, next) => {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: 'HR Management API is running'
+  const databaseConnected = mongoose.connection.readyState === 1;
+  const databaseName = databaseConnected ? mongoose.connection.name : null;
+  const databaseReady = databaseConnected && databaseName === 'hr_management';
+  const ready = databaseReady;
+
+  return res.status(ready ? 200 : 503).json({
+    success: ready,
+    status: ready ? 'ready' : 'not_ready',
+    backend: 'running',
+    database: {
+      connected: databaseConnected,
+      ready: databaseReady,
+      name: databaseName
+    }
   });
 });
 
