@@ -20,6 +20,25 @@ const generateAccessToken = (user) => {
 };
 
 /**
+ * Generate Temporary Access Token for users requiring password change
+ * Restricted scope: password_change_only
+ * @param {Object} user
+ * @returns {string} JWT temporary access token
+ */
+const generateTemporaryToken = (user) => {
+  return jwt.sign(
+    {
+      id: user._id || user.id,
+      email: user.email,
+      role: user.role,
+      scope: 'password_change_only'
+    },
+    env.jwt.secret,
+    { expiresIn: '15m' }
+  );
+};
+
+/**
  * Generate Refresh Token for authenticated user
  * @param {Object} user 
  * @returns {string} JWT refresh token
@@ -76,6 +95,7 @@ const hashToken = (token) => {
 
 module.exports = {
   generateAccessToken,
+  generateTemporaryToken,
   generateRefreshToken,
   verifyAccessToken,
   verifyRefreshToken,

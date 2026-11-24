@@ -1,5 +1,6 @@
 const { body, validationResult } = require('express-validator');
 const { sendValidationError } = require('../utils/response');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 
 // Middleware to check validation results
 const validate = (req, res, next) => {
@@ -70,10 +71,24 @@ const resetPasswordValidator = [
   validate
 ];
 
+const changePasswordValidator = [
+  body('newPassword')
+    .notEmpty().withMessage('New password is required')
+    .custom((val) => {
+      const result = validatePasswordPolicy(val);
+      if (!result.isValid) {
+        throw new Error(result.message);
+      }
+      return true;
+    }),
+  validate
+];
+
 module.exports = {
   validate,
   loginValidator,
   refreshTokenValidator,
   forgotPasswordValidator,
-  resetPasswordValidator
+  resetPasswordValidator,
+  changePasswordValidator
 };

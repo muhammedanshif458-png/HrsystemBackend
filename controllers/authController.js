@@ -72,6 +72,21 @@ class AuthController {
       next(err);
     }
   }
+
+  /**
+   * POST /api/auth/change-password
+   * Allows users with temporary token or normal token to change password
+   */
+  async changePassword(req, res, next) {
+    try {
+      const { newPassword } = req.body;
+      const userId = req.user?._id || req.user?.id;
+      const result = await authService.changePassword(userId, newPassword);
+      return sendSuccess(res, result.message, null);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new AuthController();

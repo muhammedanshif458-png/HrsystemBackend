@@ -48,6 +48,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true
     },
+    mustChangePassword: {
+      type: Boolean,
+      default: false
+    },
     lastLogin: {
       type: Date,
       default: null
@@ -84,6 +88,12 @@ userSchema.pre('save', async function (next) {
     if (typeof this.password === 'string' && /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(this.password)) {
       return next();
     }
+
+    // Safety: Enforce 72-byte max limit so bcrypt never silently truncates passwords
+    if (typeof this.password === 'string' && Buffer.byteLength(this.password, 'utf8') > 72) {
+      return next(new Error('Password must not exceed 72 bytes'));
+    }
+
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
     next();

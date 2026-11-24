@@ -3,8 +3,9 @@ const Employee = require('../models/Employee');
 const StaffLoginHistory = require('../models/StaffLoginHistory');
 const env = require('../config/env');
 const logger = require('../utils/logger');
-const { generateAccessToken, generateRefreshToken, verifyRefreshToken, generateResetToken, hashToken } = require('../utils/jwt');
+const { generateAccessToken, generateTemporaryToken, generateRefreshToken, verifyAccessToken, verifyRefreshToken, generateResetToken, hashToken } = require('../utils/jwt');
 const { AppError } = require('../middleware/errorMiddleware');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 
 /**
  * Authentication Service
@@ -96,8 +97,18 @@ class AuthService {
     user.lastLogin = new Date();
 
     // Generate tokens
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    let accessToken;
+    let refreshToken = null;
+
+    if (user.mustChangePassword) {
+      // User must change their password before full access is granted.
+      // Issue a scoped temporary token (15m validity, scope: password_change_only)
+      // and DO NOT generate or persist any refresh token.
+      accessToken = generateTemporaryToken(user);
+    } else {
+      accessToken = generateAccessToken(user);
+      refreshToken = generateRefreshToken(user);
+    }
 
     // If non-STAFF, do not attach employee profile to the returned user object
     if (user.role !== 'STAFF') {
@@ -146,6 +157,7 @@ class AuthService {
       token: accessToken,
       accessToken,
       refreshToken,
+      mustChangePassword: Boolean(user.mustChangePassword),
       workMode: loginHistory.workMode,
       loginAt: loginHistory.loginAt,
       user: userObj
@@ -170,6 +182,10 @@ class AuthService {
 
     if (!user.isActive) {
       throw new AppError('User account is inactive', 403);
+    }
+
+    if (user.mustChangePassword) {
+      throw new AppError('Password change required before sessions can be refreshed', 403);
     }
 
     const newAccessToken = generateAccessToken(user);
@@ -240,6 +256,36 @@ class AuthService {
     await user.save();
 
     return { message: 'Password has been reset successfully. Please login with your new password.' };
+  }
+
+  /**
+   * Change password for authenticated or temporary session user
+   * Handles first-login mandatory password change as well as routine user password changes
+   */
+  async changePassword(userId, newPassword) {
+    const policyResult = validatePasswordPolicy(newPassword);
+    if (!policyResult.isValid) {
+      throw new AppError(policyResult.message, 400);
+    }
+
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      throw new AppError('User not found', 404);
+    }
+
+    if (!user.isActive) {
+      throw new AppError('Your account has been deactivated. Please contact HR.', 403);
+    }
+
+    // Set new password (will be hashed by pre-save hook)
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    user.refreshToken = null; // Invalidate any temporary or prior refresh sessions
+    await user.save();
+
+    return {
+      message: 'Password changed successfully. Please log in with your new password.'
+    };
   }
 }
 

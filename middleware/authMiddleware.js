@@ -40,6 +40,26 @@ const authMiddleware = async (req, res, next) => {
       return sendError(res, 'Your account has been deactivated. Please contact HR.', null, 403);
     }
 
+    // Security Gate: Restrict temporary password_change_only tokens from accessing normal endpoints
+    if (decoded.scope === 'password_change_only') {
+      return sendError(
+        res,
+        'Temporary session: you must change your password before accessing system resources.',
+        null,
+        403
+      );
+    }
+
+    // Also block normal access if mustChangePassword flag is true on user document
+    if (user.mustChangePassword) {
+      return sendError(
+        res,
+        'Password change required. Please change your password to continue.',
+        null,
+        403
+      );
+    }
+
     // Attach user to request
     req.user = user;
 
