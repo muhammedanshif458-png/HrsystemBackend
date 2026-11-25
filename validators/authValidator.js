@@ -31,6 +31,9 @@ const loginValidator = [
     .normalizeEmail(),
   body('password')
     .notEmpty().withMessage('Password is required'),
+  body('department').optional({ nullable: true }).trim(),
+  body('division').optional({ nullable: true }).trim(),
+  body('workspace').optional({ nullable: true }).trim(),
   body('workMode').optional({ nullable: true }).isIn(['OFFICE', 'WORK_FROM_HOME'])
     .withMessage('Work mode must be OFFICE or WORK_FROM_HOME'),
   body('location').optional({ nullable: true }).isObject().withMessage('Location must be an object'),

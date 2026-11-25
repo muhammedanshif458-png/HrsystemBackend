@@ -79,6 +79,36 @@ class AuthService {
       throw new AppError('Your account role is not authorized to sign in.', 403);
     }
 
+    // Strict department validation for STAFF login
+    const requestedDepartment = (loginContext.department || loginContext.division || loginContext.workspace);
+    if (user.role === 'STAFF' && requestedDepartment && typeof requestedDepartment === 'string' && requestedDepartment.trim() !== '') {
+      const rawRequested = requestedDepartment.trim();
+      const actualDepartment = employeeData?.department ? employeeData.department.trim() : '';
+
+      const isDeptMatch = (reqDept, actualDept) => {
+        if (!reqDept || !actualDept) return false;
+        if (reqDept.toLowerCase() === actualDept.toLowerCase()) return true;
+        const norm = (d) => {
+          const s = d.toLowerCase();
+          if (s.includes('tech') || s.includes('engineer') || s === 'it' || s.includes('software') || s.includes('develop')) return 'tech';
+          if (s.includes('tele') || s.includes('call') || s.includes('client')) return 'telecalling';
+          if (s.includes('human') || s === 'hr') return 'hr';
+          return s.replace(/[\s_-]+/g, '');
+        };
+        return norm(reqDept) === norm(actualDept);
+      };
+
+      if (!actualDepartment || !isDeptMatch(rawRequested, actualDepartment)) {
+        if (!env.isProduction) {
+          logger.warn(`[Auth-Dev] Login 403: Department mismatch for "${normalizedEmail}". Registered: "${actualDepartment}", Selected: "${rawRequested}".`);
+        }
+        throw new AppError(
+          `Access denied: Your account is registered under the ${actualDepartment || 'assigned'} department, not ${rawRequested}.`,
+          403
+        );
+      }
+    }
+
     const location = loginContext.location;
     const workMode = loginContext.workMode || null;
 
