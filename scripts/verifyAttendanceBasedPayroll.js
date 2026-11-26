@@ -763,8 +763,211 @@ async function runTests() {
   assert(dMultiPost.netSalary === 4400, 'Post-resolution: netSalary = ₹4,400 (4 payable * 1100)');
   assert(dMultiPost.deductions === 17600, 'Post-resolution: deductions = ₹17,600');
 
+  console.log('\n--- TEST 17: Scenario A - Half-Day Attendance + Approved Half-Day Leave ---');
+  const userA = await User.create({ firstName: 'UserA', lastName: 'HalfAttHalfLeave', email: 'userA@example.com', password: 'password123', role: 'STAFF', isActive: true });
+  const empA = await Employee.create({
+    employeeId: 'EMP_SCENARIO_A',
+    user: userA._id,
+    firstName: 'UserA',
+    lastName: 'ScenarioA',
+    email: 'userA@example.com',
+    department: 'Tech',
+    designation: 'Developer',
+    salary: 60000,
+    paidLeaveAllowance: 1,
+    status: 'ACTIVE'
+  });
+  await Attendance.create({
+    employee: empA._id,
+    date: new Date('2026-11-23T00:00:00.000Z'),
+    status: 'HALF_DAY',
+    workMode: 'Office'
+  });
+  await Leave.create({
+    employee: empA._id,
+    leaveType: 'CASUAL',
+    durationType: 'HALF_DAY',
+    totalDays: 0.5,
+    startDate: new Date('2026-11-23T00:00:00.000Z'),
+    endDate: new Date('2026-11-23T00:00:00.000Z'),
+    reason: 'Personal afternoon leave',
+    status: 'APPROVED'
+  });
+  const resA = await request(`/api/hr/payroll/employees/${empA._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  const dA = resA.body.data;
+  assert(dA.unresolvedConflictCount === 0, 'Scenario A: Complementary half-attendance + half-leave is NOT a conflict');
+  assert(dA.presentDays === 0.5, 'Scenario A: presentDays = 0.5');
+  assert(dA.approvedLeaves === 0.5, 'Scenario A: approvedLeaves = 0.5');
+  assert(dA.approvedPaidLeaveDays === 0.5, 'Scenario A: approvedPaidLeaveDays = 0.5');
+  assert(dA.payableDays === 2.0, 'Scenario A: payableDays = 2.0 (0.5 present + 0.5 paid leave + 1 holiday)');
+  assert(dA.netSalary === 6000, 'Scenario A: netSalary = ₹6,000 (2.0 * ₹3,000)');
+
+  console.log('\n--- TEST 18: Scenario B - Approved Half-Day Leave WITHOUT Attendance ---');
+  const userB = await User.create({ firstName: 'UserB', lastName: 'HalfLeaveNoAtt', email: 'userB@example.com', password: 'password123', role: 'STAFF', isActive: true });
+  const empB = await Employee.create({
+    employeeId: 'EMP_SCENARIO_B',
+    user: userB._id,
+    firstName: 'UserB',
+    lastName: 'ScenarioB',
+    email: 'userB@example.com',
+    department: 'Tech',
+    designation: 'Developer',
+    salary: 60000,
+    paidLeaveAllowance: 1,
+    status: 'ACTIVE'
+  });
+  await Leave.create({
+    employee: empB._id,
+    leaveType: 'CASUAL',
+    durationType: 'HALF_DAY',
+    totalDays: 0.5,
+    startDate: new Date('2026-11-24T00:00:00.000Z'),
+    endDate: new Date('2026-11-24T00:00:00.000Z'),
+    reason: 'Doctor appointment',
+    status: 'APPROVED'
+  });
+  const resB = await request(`/api/hr/payroll/employees/${empB._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  const dB = resB.body.data;
+  assert(dB.presentDays === 0, 'Scenario B: Zero attendance evidence strictly yields presentDays = 0');
+  assert(dB.approvedLeaves === 0.5, 'Scenario B: approvedLeaves = 0.5');
+  assert(dB.approvedPaidLeaveDays === 0.5, 'Scenario B: approvedPaidLeaveDays = 0.5');
+  assert(dB.payableDays === 1.5, 'Scenario B: payableDays = 1.5 (0.5 paid leave + 1 holiday)');
+  assert(dB.lopDays === 18.5, 'Scenario B: lopDays = 18.5 (unworked half day is 0.5 LOP)');
+  assert(dB.netSalary === 4500, 'Scenario B: netSalary = ₹4,500 (1.5 * ₹3,000)');
+
+  console.log('\n--- TEST 19: Scenario C - Half-Day Attendance WITHOUT Leave ---');
+  const userC = await User.create({ firstName: 'UserC', lastName: 'HalfAttNoLeave', email: 'userC@example.com', password: 'password123', role: 'STAFF', isActive: true });
+  const empC = await Employee.create({
+    employeeId: 'EMP_SCENARIO_C',
+    user: userC._id,
+    firstName: 'UserC',
+    lastName: 'ScenarioC',
+    email: 'userC@example.com',
+    department: 'Tech',
+    designation: 'Developer',
+    salary: 60000,
+    paidLeaveAllowance: 1,
+    status: 'ACTIVE'
+  });
+  await Attendance.create({
+    employee: empC._id,
+    date: new Date('2026-11-25T00:00:00.000Z'),
+    status: 'HALF_DAY',
+    workMode: 'Office'
+  });
+  const resC = await request(`/api/hr/payroll/employees/${empC._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  const dC = resC.body.data;
+  assert(dC.presentDays === 0.5, 'Scenario C: presentDays = 0.5');
+  assert(dC.approvedLeaves === 0, 'Scenario C: approvedLeaves = 0');
+  assert(dC.approvedPaidLeaveDays === 0, 'Scenario C: No automatic paid leave added (approvedPaidLeaveDays = 0)');
+  assert(dC.payableDays === 1.5, 'Scenario C: payableDays = 1.5 (0.5 present + 1 holiday)');
+  assert(dC.lopDays === 18.5, 'Scenario C: lopDays = 18.5 (remaining half day is LOP)');
+  assert(dC.netSalary === 4500, 'Scenario C: netSalary = ₹4,500 (1.5 * ₹3,000)');
+
+  console.log('\n--- TEST 20: Scenario G & Chronological Paid Leave Allocation ---');
+  const userG = await User.create({ firstName: 'UserG', lastName: 'MultiHalfLeaves', email: 'userG@example.com', password: 'password123', role: 'STAFF', isActive: true });
+  const empG = await Employee.create({
+    employeeId: 'EMP_SCENARIO_G',
+    user: userG._id,
+    firstName: 'UserG',
+    lastName: 'ScenarioG',
+    email: 'userG@example.com',
+    department: 'Tech',
+    designation: 'Developer',
+    salary: 60000,
+    paidLeaveAllowance: 1,
+    status: 'ACTIVE'
+  });
+  // 3 half-day approved leaves: Nov 16, Nov 17, Nov 18
+  await Leave.create({
+    employee: empG._id,
+    leaveType: 'CASUAL',
+    durationType: 'HALF_DAY',
+    totalDays: 0.5,
+    startDate: new Date('2026-11-16T00:00:00.000Z'),
+    endDate: new Date('2026-11-16T00:00:00.000Z'),
+    reason: 'Personal 1',
+    status: 'APPROVED'
+  });
+  await Leave.create({
+    employee: empG._id,
+    leaveType: 'CASUAL',
+    durationType: 'HALF_DAY',
+    totalDays: 0.5,
+    startDate: new Date('2026-11-17T00:00:00.000Z'),
+    endDate: new Date('2026-11-17T00:00:00.000Z'),
+    reason: 'Personal 2',
+    status: 'APPROVED'
+  });
+  await Leave.create({
+    employee: empG._id,
+    leaveType: 'CASUAL',
+    durationType: 'HALF_DAY',
+    totalDays: 0.5,
+    startDate: new Date('2026-11-18T00:00:00.000Z'),
+    endDate: new Date('2026-11-18T00:00:00.000Z'),
+    reason: 'Personal 3',
+    status: 'APPROVED'
+  });
+  const resG = await request(`/api/hr/payroll/employees/${empG._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  const dG = resG.body.data;
+  assert(dG.presentDays === 0, 'Scenario G: presentDays = 0');
+  assert(dG.approvedLeaves === 1.5, 'Scenario G: approvedLeaves = 1.5');
+  assert(dG.approvedPaidLeaveDays === 1.0, 'Scenario G: First two 0.5-day leaves consume exactly 1.0 paid leave allowance');
+  assert(dG.approvedUnpaidLeaveDays === 0.5, 'Scenario G: Third 0.5-day leave is unpaid (0.5 unpaid)');
+  assert(dG.payableDays === 2.0, 'Scenario G: payableDays = 2.0 (1.0 paid leave + 1 holiday)');
+  assert(dG.lopDays === 18, 'Scenario G: lopDays = 18');
+  assert(dG.netSalary === 6000, 'Scenario G: netSalary = ₹6,000 (2.0 * ₹3,000)');
+
+  console.log('\n--- TEST 21: Scenario F - Full-Day Attendance Conflicting with Half-Day Leave ---');
+  const userF = await User.create({ firstName: 'UserF', lastName: 'ConflictHalf', email: 'userF@example.com', password: 'password123', role: 'STAFF', isActive: true });
+  const empF = await Employee.create({
+    employeeId: 'EMP_SCENARIO_F',
+    user: userF._id,
+    firstName: 'UserF',
+    lastName: 'ScenarioF',
+    email: 'userF@example.com',
+    department: 'Tech',
+    designation: 'Developer',
+    salary: 60000,
+    paidLeaveAllowance: 1,
+    status: 'ACTIVE'
+  });
+  await Attendance.create({
+    employee: empF._id,
+    date: new Date('2026-11-26T00:00:00.000Z'),
+    status: 'PRESENT',
+    workMode: 'Office'
+  });
+  await Leave.create({
+    employee: empF._id,
+    leaveType: 'CASUAL',
+    durationType: 'HALF_DAY',
+    totalDays: 0.5,
+    startDate: new Date('2026-11-26T00:00:00.000Z'),
+    endDate: new Date('2026-11-26T00:00:00.000Z'),
+    reason: 'Conflicting leave',
+    status: 'APPROVED'
+  });
+  const resF = await request(`/api/hr/payroll/employees/${empF._id}?month=11&year=2026`, {
+    headers: { Authorization: `Bearer ${hrToken}` }
+  });
+  const dF = resF.body.data;
+  assert(dF.unresolvedConflictCount === 1, 'Scenario F: Full-day attendance + half-day leave triggers conflict');
+  assert(dF.hasUnresolvedConflicts === true, 'Scenario F: hasUnresolvedConflicts = true');
+  assert(dF.presentDays === 0, 'Scenario F: Neither attendance nor leave counted while unresolved (no double counting)');
+  assert(dF.approvedPaidLeaveDays === 0, 'Scenario F: Conflicted leave does not consume paid allowance');
+
   console.log('\n================================================================');
-  console.log('   ALL 16 ATTENDANCE-BASED PAYROLL VERIFICATIONS PASSED!       ');
+  console.log('   ALL 21 ATTENDANCE-BASED PAYROLL VERIFICATIONS PASSED!       ');
   console.log('================================================================\n');
 
   await mongoose.disconnect();

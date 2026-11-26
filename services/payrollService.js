@@ -212,13 +212,13 @@ class PayrollService {
       }
     }
 
-    // 3. Query approved leaves overlapping the month
+    // 3. Query approved leaves overlapping the month, sorted chronologically by startDate
     const approvedLeaves = await Leave.find({
       employee: employee._id,
       status: 'APPROVED',
       startDate: { $lte: endOfMonth },
       endDate: { $gte: startOfMonth }
-    }).lean();
+    }).sort({ startDate: 1, createdAt: 1 }).lean();
 
     // Map approved leaves by dateKey
     const leavesByDate = new Map();
@@ -306,6 +306,7 @@ class PayrollService {
     let presentDays = 0;
     let halfDays = 0;
     let wfhDays = 0;
+    const halfDaysCountedDates = new Set();
 
     for (const [dKey, attRecord] of attendanceByDate.entries()) {
       if (!isScheduledWorkDate(dKey)) continue;
@@ -317,6 +318,7 @@ class PayrollService {
           const status = (attRecord.status || '').toUpperCase();
           if (status === 'HALF_DAY') {
             halfDays++;
+            halfDaysCountedDates.add(dKey);
             if (isWfh) wfhDays += 0.5;
             else presentDays += 0.5;
           } else {
@@ -331,6 +333,7 @@ class PayrollService {
       const status = (attRecord.status || '').toUpperCase();
       if (status === 'HALF_DAY') {
         halfDays++;
+        halfDaysCountedDates.add(dKey);
         if (isWfh) wfhDays += 0.5;
         else presentDays += 0.5;
       } else {
@@ -340,15 +343,21 @@ class PayrollService {
     }
 
     // 6. Calculate Approved Leave Breakdown
-    const paidLeaveAllowance = typeof employee.paidLeaveAllowance === 'number' ? employee.paidLeaveAllowance : 1;
+    // Every employee receives exactly ONE full working day of paid leave allowance for the applicable payroll period
+    const paidLeaveAllowance = 1;
     let eligiblePaidLeaveDaysCount = 0;
     let approvedPaidLeaveDays = 0;
     let approvedUnpaidLeaveDays = 0;
     let totalApprovedLeaveDays = 0;
 
-    for (const [dKey, leavesList] of leavesByDate.entries()) {
+    // Process leave dates in strict chronological order for paid leave allowance
+    const sortedLeaveDateKeys = Array.from(leavesByDate.keys()).sort();
+
+    for (const dKey of sortedLeaveDateKeys) {
       // Only evaluate leaves on scheduled working days (weekly offs are not working days)
       if (!isScheduledWorkDate(dKey)) continue;
+
+      const leavesList = leavesByDate.get(dKey) || [];
 
       for (const leaveRecord of leavesList) {
         const leaveDayWeight = getLeaveDayWeight(leaveRecord);
