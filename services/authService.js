@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const { generateAccessToken, generateTemporaryToken, generateRefreshToken, verifyAccessToken, verifyRefreshToken, generateResetToken, hashToken } = require('../utils/jwt');
 const { AppError } = require('../middleware/errorMiddleware');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const { normalizeEmailAddress, emailLookupCandidates, findOneByEmail } = require('../utils/email');
 
 /**
  * Authentication Service
@@ -16,13 +17,15 @@ class AuthService {
    */
   async login(email, password, loginContext = {}) {
     // Explicitly select password field as it is marked select: false
-    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedEmail = normalizeEmailAddress(email);
 
     if (!env.isProduction) {
       logger.debug(`[Auth-Dev] Login attempt initiated for email: "${normalizedEmail}"`);
     }
 
-    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    // Match the exact address first, then the legacy Gmail-normalized form
+    // (older API versions stored "john.doe@gmail.com" as "johndoe@gmail.com").
+    const user = await findOneByEmail(User, normalizedEmail, '+password');
 
     if (!user) {
       if (!env.isProduction) {
@@ -39,9 +42,8 @@ class AuthService {
     }
 
     // Defensive check: Verify linked Employee profile status if exists
-    let employeeData = await Employee.findOne({
-      $or: [{ user: user._id }, { email: normalizedEmail }]
-    });
+    let employeeData = await Employee.findOne({ user: user._id })
+      || await Employee.findOne({ email: { $in: [user.email, ...emailLookupCandidates(normalizedEmail)] } });
 
     if (employeeData) {
       if (employeeData.isDeleted || employeeData.status === 'INACTIVE' || employeeData.status === 'TERMINATED' || employeeData.status === 'RESIGNED') {
@@ -245,7 +247,7 @@ class AuthService {
    * Request password reset token
    */
   async forgotPassword(email) {
-    const user = await User.findOne({ email });
+    const user = await findOneByEmail(User, email);
     if (!user) {
       // Return success-like response to avoid email enumeration attacks
       return { message: 'If an account with that email exists, reset instructions have been generated.' };

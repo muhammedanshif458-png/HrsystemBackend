@@ -27,7 +27,7 @@ const createEmployeeValidator = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Please provide a valid email')
-    .normalizeEmail(),
+    .toLowerCase(), // do not use normalizeEmail(): it strips dots from Gmail addresses
   body('password')
     .optional()
     .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
@@ -117,7 +117,7 @@ const updateEmployeeValidator = [
     .optional()
     .trim()
     .isEmail().withMessage('Please provide a valid email')
-    .normalizeEmail(),
+    .toLowerCase(), // do not use normalizeEmail(): it strips dots from Gmail addresses
   body('phone')
     .optional()
     .trim(),
