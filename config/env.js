@@ -14,6 +14,18 @@ if (isProduction) {
     throw new Error(`Missing required production environment variables: ${missingVars.join(', ')}`);
   }
 
+  // HS256 secrets must be long and random; short secrets can be brute-forced offline from any token.
+  const weakSecrets = ['JWT_SECRET', 'JWT_REFRESH_SECRET'].filter((key) => {
+    const value = process.env[key].trim();
+    return value.length < 32 || /^replace_with|^default_jwt|change_in_production/i.test(value);
+  });
+  if (weakSecrets.length) {
+    throw new Error(`${weakSecrets.join(', ')} must be at least 32 random characters (generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))").`);
+  }
+  if (process.env.JWT_SECRET.trim() === process.env.JWT_REFRESH_SECRET.trim()) {
+    throw new Error('JWT_SECRET and JWT_REFRESH_SECRET must be different.');
+  }
+
   let configuredMongoUrl;
   try {
     configuredMongoUrl = new URL(process.env.MONGODB_URI);

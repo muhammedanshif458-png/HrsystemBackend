@@ -2,6 +2,10 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const env = require('../config/env');
 
+const ALGORITHM = 'HS256';
+const SIGN_OPTIONS = { algorithm: ALGORITHM };
+const VERIFY_OPTIONS = { algorithms: [ALGORITHM] };
+
 /**
  * Generate Access Token for authenticated user
  * @param {Object} user 
@@ -12,10 +16,11 @@ const generateAccessToken = (user) => {
     {
       id: user._id || user.id,
       email: user.email,
-      role: user.role
+      role: user.role,
+      tv: user.tokenVersion || 0
     },
     env.jwt.secret,
-    { expiresIn: env.jwt.expiresIn }
+    { ...SIGN_OPTIONS, expiresIn: env.jwt.expiresIn }
   );
 };
 
@@ -31,10 +36,11 @@ const generateTemporaryToken = (user) => {
       id: user._id || user.id,
       email: user.email,
       role: user.role,
+      tv: user.tokenVersion || 0,
       scope: 'password_change_only'
     },
     env.jwt.secret,
-    { expiresIn: '15m' }
+    { ...SIGN_OPTIONS, expiresIn: '15m' }
   );
 };
 
@@ -46,10 +52,14 @@ const generateTemporaryToken = (user) => {
 const generateRefreshToken = (user) => {
   return jwt.sign(
     {
-      id: user._id || user.id
+      id: user._id || user.id,
+      tv: user.tokenVersion || 0,
+      // Unique id so two refresh tokens issued in the same second still differ
+      // (otherwise a rotated-out token would be identical to the new one).
+      jti: crypto.randomUUID()
     },
     env.jwt.refreshSecret,
-    { expiresIn: env.jwt.refreshExpiresIn }
+    { ...SIGN_OPTIONS, expiresIn: env.jwt.refreshExpiresIn }
   );
 };
 
@@ -59,7 +69,7 @@ const generateRefreshToken = (user) => {
  * @returns {Object} Decoded payload
  */
 const verifyAccessToken = (token) => {
-  return jwt.verify(token, env.jwt.secret);
+  return jwt.verify(token, env.jwt.secret, VERIFY_OPTIONS);
 };
 
 /**
@@ -68,7 +78,7 @@ const verifyAccessToken = (token) => {
  * @returns {Object} Decoded payload
  */
 const verifyRefreshToken = (token) => {
-  return jwt.verify(token, env.jwt.refreshSecret);
+  return jwt.verify(token, env.jwt.refreshSecret, VERIFY_OPTIONS);
 };
 
 /**
@@ -93,7 +103,36 @@ const hashToken = (token) => {
   return crypto.createHash('sha256').update(token).digest('hex');
 };
 
+/**
+ * Shared post-verification checks for a decoded access token and its user.
+ * Used by the REST auth middlewares and the Socket.IO handshake so they can
+ * never drift apart.
+ * @returns {null | { status: number, message: string }} null when the token is acceptable
+ */
+const getTokenRejection = (decoded, user, { allowPasswordChangeOnly = false } = {}) => {
+  if (!user) {
+    return { status: 401, message: 'User belonging to this token no longer exists.' };
+  }
+  if (!user.isActive) {
+    return { status: 403, message: 'Your account has been deactivated. Please contact HR.' };
+  }
+  // Tokens issued before the last password change/reset are revoked.
+  if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
+    return { status: 401, message: 'Session expired because the password was changed. Please login again.' };
+  }
+  if (!allowPasswordChangeOnly) {
+    if (decoded.scope === 'password_change_only') {
+      return { status: 403, message: 'Temporary session: you must change your password before accessing system resources.' };
+    }
+    if (user.mustChangePassword) {
+      return { status: 403, message: 'Password change required. Please change your password to continue.' };
+    }
+  }
+  return null;
+};
+
 module.exports = {
+  getTokenRejection,
   generateAccessToken,
   generateTemporaryToken,
   generateRefreshToken,

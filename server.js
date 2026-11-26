@@ -25,6 +25,10 @@ const birthdayRoutes = require('./routes/birthdayRoutes');
 // 3. Initialize Express app
 const app = express();
 
+// Render (and most hosts) sit behind one reverse proxy; trust it so req.ip is the
+// real client IP. Required for per-client login rate limiting.
+app.set('trust proxy', 1);
+
 // 4. Enable Helmet for HTTP security headers (permit cross-origin resource policy for documents & media)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }

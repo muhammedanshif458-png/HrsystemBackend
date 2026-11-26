@@ -1,5 +1,5 @@
 const User = require('../models/User');
-const { verifyAccessToken } = require('../utils/jwt');
+const { verifyAccessToken, getTokenRejection } = require('../utils/jwt');
 const { sendError } = require('../utils/response');
 
 /**
@@ -32,12 +32,9 @@ const passwordChangeAuthMiddleware = async (req, res, next) => {
 
     const user = await User.findById(decoded.id);
 
-    if (!user) {
-      return sendError(res, 'User belonging to this token no longer exists.', null, 401);
-    }
-
-    if (!user.isActive) {
-      return sendError(res, 'Your account has been deactivated. Please contact HR.', null, 403);
+    const rejection = getTokenRejection(decoded, user, { allowPasswordChangeOnly: true });
+    if (rejection) {
+      return sendError(res, rejection.message, null, rejection.status);
     }
 
     // Attach user and decoded token info to request

@@ -1,6 +1,6 @@
 const { Server: SocketIOServer } = require('socket.io');
 const jwt = require('jsonwebtoken');
-const { verifyAccessToken } = require('../utils/jwt');
+const { verifyAccessToken, getTokenRejection } = require('../utils/jwt');
 const env = require('../config/env');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
@@ -43,8 +43,11 @@ class SocketService {
         const decoded = verifyAccessToken(token);
 
         const user = await User.findById(decoded.id).select('+role');
-        if (!user || !user.isActive) {
-          return next(new Error('Authentication error: User inactive or not found'));
+        // Same rules as REST: rejects inactive users, revoked tokens, and
+        // temporary password_change_only sessions.
+        const rejection = getTokenRejection(decoded, user);
+        if (rejection) {
+          return next(new Error(`Authentication error: ${rejection.message}`));
         }
 
         socket.user = user;

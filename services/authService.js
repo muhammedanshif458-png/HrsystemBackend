@@ -170,7 +170,8 @@ class AuthService {
       metadata: loginContext.metadata || {}
     });
 
-    user.refreshToken = refreshToken;
+    // Store only a SHA-256 hash of the refresh token, so a DB leak cannot be replayed.
+    user.refreshToken = refreshToken ? hashToken(refreshToken) : null;
     await user.save();
 
     const userObj = user.toJSON();
@@ -208,8 +209,16 @@ class AuthService {
     }
 
     const user = await User.findById(decoded.id).select('+refreshToken');
-    if (!user || user.refreshToken !== token) {
+    // Accept the hashed form, plus the legacy plain-text form stored before
+    // hashing was introduced (it is replaced by a hash on this rotation).
+    const storedMatches = Boolean(user && user.refreshToken) &&
+      (user.refreshToken === hashToken(token) || user.refreshToken === token);
+    if (!storedMatches) {
       throw new AppError('Invalid refresh token or user session expired', 401);
+    }
+
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
+      throw new AppError('Session expired because the password was changed. Please login again.', 401);
     }
 
     if (!user.isActive) {
@@ -223,7 +232,7 @@ class AuthService {
     const newAccessToken = generateAccessToken(user);
     const newRefreshToken = generateRefreshToken(user);
 
-    user.refreshToken = newRefreshToken;
+    user.refreshToken = hashToken(newRefreshToken);
     await user.save();
 
     return {
@@ -294,7 +303,7 @@ class AuthService {
    * Change password for authenticated or temporary session user
    * Handles first-login mandatory password change as well as routine user password changes
    */
-  async changePassword(userId, newPassword) {
+  async changePassword(userId, newPassword, { currentPassword, tokenScope = 'normal' } = {}) {
     const policyResult = validatePasswordPolicy(newPassword);
     if (!policyResult.isValid) {
       throw new AppError(policyResult.message, 400);
@@ -307,6 +316,24 @@ class AuthService {
 
     if (!user.isActive) {
       throw new AppError('Your account has been deactivated. Please contact HR.', 403);
+    }
+
+    // A normal session must prove knowledge of the current password, so a stolen
+    // access token cannot be used to take over the account. The first-login
+    // temporary token (password_change_only) was just issued after a successful
+    // password check, so it does not need it again.
+    if (tokenScope !== 'password_change_only') {
+      if (!currentPassword) {
+        throw new AppError('Current password is required', 400);
+      }
+      const currentOk = await user.comparePassword(currentPassword);
+      if (!currentOk) {
+        throw new AppError('Current password is incorrect', 401);
+      }
+    }
+
+    if (await user.comparePassword(newPassword)) {
+      throw new AppError('New password must be different from the current password', 400);
     }
 
     // Set new password (will be hashed by pre-save hook)
