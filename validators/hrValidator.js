@@ -28,9 +28,18 @@ const createEmployeeValidator = [
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Please provide a valid email')
     .toLowerCase(), // do not use normalizeEmail(): it strips dots from Gmail addresses
+  // HR sets the staff login password here; staff sign in with it. It is mandatory so an
+  // account is never created with a hidden default password nobody knows.
   body('password')
-    .optional()
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+    .exists({ checkNull: true }).withMessage('Password is required for the staff login')
+    .bail()
+    .isString().withMessage('Password must be text')
+    .bail()
+    .custom((val) => {
+      if (val.trim().length < 6) throw new Error('Password must be at least 6 characters long');
+      if (Buffer.byteLength(val, 'utf8') > 72) throw new Error('Password must not exceed 72 bytes');
+      return true;
+    }),
   body('employeeId')
     .optional()
     .trim()

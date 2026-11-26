@@ -322,9 +322,11 @@ return {
     }
   }
 
-  const finalPassword = (password && String(password).trim().length >= 6)
-    ? String(password).trim()
-    : 'Password@123';
+  // No silent default password: HR must set the staff login password explicitly.
+  if (!password || String(password).trim().length < 6) {
+    throw new AppError('Password is required for the staff login (minimum 6 characters)', 400);
+  }
+  const finalPassword = String(password).trim();
 
   let newUser;
   try {
