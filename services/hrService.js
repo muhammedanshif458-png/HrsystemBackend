@@ -253,8 +253,9 @@ return {
    */
   async createEmployee(data, currentUser = null) {
   // Support both 'name' (full name from Flutter) and firstName/lastName separately
-  if (!data.firstName && data.name) {
-    const parts = data.name.trim().split(' ');
+  const fullNameInput = data.name || data.fullName;
+  if (!data.firstName && fullNameInput) {
+    const parts = String(fullNameInput).trim().split(/\s+/);
     data.firstName = parts[0];
     data.lastName = parts.slice(1).join(' ') || parts[0];
   }

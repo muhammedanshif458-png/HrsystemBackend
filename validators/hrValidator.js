@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 const { body, param, query } = require('express-validator');
 const { validate } = require('./authValidator');
 
+// Accept dropdown labels like "Male", "Full Time", "full-time", "On Leave" and store
+// them in the canonical enum form (MALE, FULL_TIME, ON_LEAVE) the database expects.
+const toEnumValue = (val) => (typeof val === 'string'
+  ? val.trim().toUpperCase().replace(/[\s-]+/g, '_')
+  : val);
+
 const createEmployeeValidator = [
   body('name')
     .optional()
@@ -62,6 +68,7 @@ const createEmployeeValidator = [
     .isLength({ max: 50 }).withMessage('Work mode must be under 50 characters'),
   body('employmentType')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'])
     .withMessage('Employment type must be FULL_TIME, PART_TIME, CONTRACT, or INTERN'),
   body('salary')
@@ -69,10 +76,12 @@ const createEmployeeValidator = [
     .isFloat({ min: 0 }).withMessage('Salary must be a non-negative number'),
   body('status')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'])
     .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, TERMINATED, or RESIGNED'),
   body('gender')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['MALE', 'FEMALE', 'OTHER'])
     .withMessage('Gender must be MALE, FEMALE, or OTHER'),
   body('dateOfBirth')
@@ -147,6 +156,7 @@ const updateEmployeeValidator = [
     .isLength({ max: 50 }).withMessage('Work mode must be under 50 characters'),
   body('employmentType')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'])
     .withMessage('Employment type must be FULL_TIME, PART_TIME, CONTRACT, or INTERN'),
   body('salary')
@@ -154,6 +164,7 @@ const updateEmployeeValidator = [
     .isFloat({ min: 0 }).withMessage('Salary must be a non-negative number'),
   body('status')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'])
     .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, TERMINATED, or RESIGNED'),
   body('dateOfBirth')
