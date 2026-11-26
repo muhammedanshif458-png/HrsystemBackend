@@ -80,9 +80,12 @@ class AuthController {
    */
   async changePassword(req, res, next) {
     try {
-      const { newPassword } = req.body;
+      const { newPassword, currentPassword, oldPassword } = req.body;
       const userId = req.user?._id || req.user?.id;
-      const result = await authService.changePassword(userId, newPassword);
+      const result = await authService.changePassword(userId, newPassword, {
+        currentPassword: currentPassword || oldPassword,
+        tokenScope: req.tokenScope
+      });
       return sendSuccess(res, result.message, null);
     } catch (err) {
       next(err);

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { EMAIL_REGEX } = require('../utils/email');
 const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema(
@@ -19,7 +20,7 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
-      match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email']
+      match: [EMAIL_REGEX, 'Please provide a valid email']
     },
     phone: {
       type: String,
@@ -52,6 +53,16 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    // Bumped whenever the password changes. Every JWT carries it ("tv"), so
+    // tokens issued before a password change/reset stop working immediately.
+    tokenVersion: {
+      type: Number,
+      default: 0
+    },
+    passwordChangedAt: {
+      type: Date,
+      default: null
+    },
     lastLogin: {
       type: Date,
       default: null
@@ -81,6 +92,12 @@ const userSchema = new mongoose.Schema(
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
     return next();
+  }
+
+  // Password changed on an existing account -> revoke every previously issued token.
+  if (!this.isNew) {
+    this.tokenVersion = (this.tokenVersion || 0) + 1;
+    this.passwordChangedAt = new Date();
   }
 
   try {

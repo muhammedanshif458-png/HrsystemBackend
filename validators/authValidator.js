@@ -28,7 +28,7 @@ const loginValidator = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Please provide a valid email address')
-    .normalizeEmail(),
+    .toLowerCase(), // do not use normalizeEmail(): it strips dots from Gmail addresses
   body('password')
     .notEmpty().withMessage('Password is required'),
   body('department').optional({ nullable: true }).trim(),
@@ -60,7 +60,7 @@ const forgotPasswordValidator = [
     .trim()
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Please provide a valid email address')
-    .normalizeEmail(),
+    .toLowerCase(), // do not use normalizeEmail(): it strips dots from Gmail addresses
   validate
 ];
 

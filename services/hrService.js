@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
+const { normalizeEmailAddress, findOneByEmail } = require('../utils/email');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
@@ -286,14 +287,16 @@ return {
     status = 'ACTIVE'
   } = data;
 
-  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedEmail = normalizeEmailAddress(email);
   if (!normalizedEmail) {
     throw new AppError('Email is required', 400);
   }
 
   // Check if user or employee with email already exists
-  const existingUser = await User.findOne({ email: normalizedEmail });
-  const existingEmployee = await Employee.findOne({ email: normalizedEmail });
+  // Also match the legacy Gmail-normalized form so we never create a second
+  // account for "john.doe@gmail.com" when "johndoe@gmail.com" already exists.
+  const existingUser = await findOneByEmail(User, normalizedEmail);
+  const existingEmployee = await findOneByEmail(Employee, normalizedEmail);
   if (existingEmployee) {
     throw new AppError(`An employee with email '${normalizedEmail}' already exists (field: email)`, 409);
   }
@@ -334,7 +337,11 @@ return {
       newUser.firstName = firstName;
       newUser.lastName = lastName;
       newUser.phone = phone || '';
-      newUser.role = 'STAFF';
+      // Never demote an existing HR / SUPER_ADMIN account to STAFF just because
+      // an employee profile is being created for them (that locked HR out of the HR app).
+      if (!['HR', 'SUPER_ADMIN'].includes(newUser.role)) {
+        newUser.role = 'STAFF';
+      }
       newUser.isActive = status === 'ACTIVE';
       if (password && String(password).trim().length >= 6) {
         newUser.password = String(password).trim();
