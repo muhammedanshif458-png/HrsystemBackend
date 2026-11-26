@@ -373,6 +373,7 @@ async function runBirthdayTestSuite() {
       firstName: 'Valid',
       lastName: 'DOB',
       email: 'valid.dob@test.com',
+      password: 'ValidDob@2026',
       department: 'Tech',
       designation: 'Engineer',
       dateOfBirth: '1995-07-20'

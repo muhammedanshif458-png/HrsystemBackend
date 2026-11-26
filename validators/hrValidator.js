@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 const { body, param, query } = require('express-validator');
 const { validate } = require('./authValidator');
 
+// Accept dropdown labels like "Male", "Full Time", "full-time", "On Leave" and store
+// them in the canonical enum form (MALE, FULL_TIME, ON_LEAVE) the database expects.
+const toEnumValue = (val) => (typeof val === 'string'
+  ? val.trim().toUpperCase().replace(/[\s-]+/g, '_')
+  : val);
+
 const createEmployeeValidator = [
   body('name')
     .optional()
@@ -28,9 +34,18 @@ const createEmployeeValidator = [
     .notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Please provide a valid email')
     .toLowerCase(), // do not use normalizeEmail(): it strips dots from Gmail addresses
+  // HR sets the staff login password here; staff sign in with it. It is mandatory so an
+  // account is never created with a hidden default password nobody knows.
   body('password')
-    .optional()
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+    .exists({ checkNull: true }).withMessage('Password is required for the staff login')
+    .bail()
+    .isString().withMessage('Password must be text')
+    .bail()
+    .custom((val) => {
+      if (val.trim().length < 6) throw new Error('Password must be at least 6 characters long');
+      if (Buffer.byteLength(val, 'utf8') > 72) throw new Error('Password must not exceed 72 bytes');
+      return true;
+    }),
   body('employeeId')
     .optional()
     .trim()
@@ -53,6 +68,7 @@ const createEmployeeValidator = [
     .isLength({ max: 50 }).withMessage('Work mode must be under 50 characters'),
   body('employmentType')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'])
     .withMessage('Employment type must be FULL_TIME, PART_TIME, CONTRACT, or INTERN'),
   body('salary')
@@ -60,10 +76,12 @@ const createEmployeeValidator = [
     .isFloat({ min: 0 }).withMessage('Salary must be a non-negative number'),
   body('status')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'])
     .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, TERMINATED, or RESIGNED'),
   body('gender')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['MALE', 'FEMALE', 'OTHER'])
     .withMessage('Gender must be MALE, FEMALE, or OTHER'),
   body('dateOfBirth')
@@ -138,6 +156,7 @@ const updateEmployeeValidator = [
     .isLength({ max: 50 }).withMessage('Work mode must be under 50 characters'),
   body('employmentType')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'])
     .withMessage('Employment type must be FULL_TIME, PART_TIME, CONTRACT, or INTERN'),
   body('salary')
@@ -145,6 +164,7 @@ const updateEmployeeValidator = [
     .isFloat({ min: 0 }).withMessage('Salary must be a non-negative number'),
   body('status')
     .optional()
+    .customSanitizer(toEnumValue)
     .isIn(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED', 'RESIGNED'])
     .withMessage('Status must be ACTIVE, INACTIVE, ON_LEAVE, TERMINATED, or RESIGNED'),
   body('dateOfBirth')

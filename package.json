@@ -9,6 +9,8 @@
     "seed": "node scripts/seedAdmin.js",
     "seed:superadmin": "node scripts/seedSuperAdmin.js",
     "restore:superadmin": "node scripts/seedSuperAdmin.js --restore-super-admin",
+    "seed:schedules": "node scripts/correctDepartmentSchedules.js",
+    "diagnose:login": "node scripts/diagnoseLogin.js",
     "test": "npm run test:attendance && node scripts/verifySystem.js && node scripts/verifyStaffLoginTracking.js && node scripts/verifyStaffLoginLocationPolicy.js && node scripts/verifyDepartmentCountsAndLeadership.js && node scripts/verifyHrDashboardWfhMetric.js && node scripts/verifyStaffAttendanceHistory.js && node scripts/verifySickMedicalLeave.js && node scripts/verifyStaffLeaveStatusAndHistory.js && node scripts/verifyAccountDeactivatedLoginIssue.js && node scripts/verifySuperAdminRestoration.js && node scripts/verifyHrDashboardConnection.js && node scripts/verifyAttendanceBasedPayroll.js && node scripts/verifyPayrollBatchPersistence.js",
     "test:payroll": "node scripts/verifyAttendanceBasedPayroll.js",
     "test:payroll-batches": "node scripts/verifyPayrollBatchPersistence.js",
@@ -34,7 +36,8 @@
     "test:staff-attendance": "node scripts/verifyStaffAttendanceHistory.js",
     "test:leave-bulk-delete": "node scripts/verifyLeaveBulkDelete.js",
     "test:login-location-policy": "node scripts/verifyStaffLoginLocationPolicy.js",
-    "test:departments": "node scripts/verifyDepartmentCountsAndLeadership.js"
+    "test:departments": "node scripts/verifyDepartmentCountsAndLeadership.js",
+    "test:e2e": "node scripts/verifyFullHrStaffFlow.js"
   },
   "keywords": [
     "hr",

@@ -140,7 +140,10 @@ app.use('/uploads', (req, res, next) => {
 app.get('/api/health', (req, res) => {
   const databaseConnected = mongoose.connection.readyState === 1;
   const databaseName = databaseConnected ? mongoose.connection.name : null;
-  const databaseReady = databaseConnected && databaseName === 'hr_management';
+  // Production must use hr_management (catches a URI that silently points at "test").
+  // The isolated test suite runs against hr_management_test.
+  const expectedDatabases = env.nodeEnv === 'test' ? ['hr_management', 'hr_management_test', 'hr_management_e2e'] : ['hr_management'];
+  const databaseReady = databaseConnected && expectedDatabases.includes(databaseName);
   const ready = databaseReady;
 
   return res.status(ready ? 200 : 503).json({
