@@ -82,6 +82,14 @@ const maskUri = (uri) => String(uri || '').replace(/\/\/([^:@/]+):([^@/]+)@/, '/
   if (passwordArg !== undefined) {
     const ok = await user.comparePassword(passwordArg);
     console.log(ok ? '✓ Password matches.' : '✗ Password does NOT match → "Invalid email or password" (401).');
+    if (!ok && user.password === passwordArg) {
+      console.log('  ↳ Stored value equals the typed password in PLAIN TEXT: it was inserted directly into the DB without hashing.');
+    }
+  }
+
+  // HR "create employee" silently falls back to this when no `password` field is sent.
+  if (user.password && await user.comparePassword('Password@123')) {
+    console.log('! This account still has the DEFAULT password "Password@123" (HR created it without sending a `password` field).');
   }
 
   await mongoose.disconnect();
