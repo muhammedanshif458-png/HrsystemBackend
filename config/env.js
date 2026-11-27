@@ -58,7 +58,7 @@ const env = {
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d'
   },
   
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:51834,http://localhost:3000',
+  clientUrl: process.env.CLIENT_URL || 'https://hr-dashboard-1-9c41.onrender.com,https://hrsystem-zzhg.onrender.com',
 
   // Location is optional for staff login (both OFFICE and WORK_FROM_HOME). Kept for legacy client compatibility.
   staffLoginRequireLocation: process.env.STAFF_LOGIN_REQUIRE_LOCATION === 'true',

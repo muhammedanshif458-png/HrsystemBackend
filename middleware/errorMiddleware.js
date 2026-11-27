@@ -33,6 +33,16 @@ const errorMiddleware = (err, req, res, next) => {
     logger.warn(`${req.method} ${req.originalUrl} - [${statusCode}] ${err.message}`);
   }
 
+  // 0. Database temporarily unreachable (Atlas blip, reconnecting): tell the
+  //    client to retry instead of returning an internal 500.
+  const dbUnavailable =
+    ['MongooseServerSelectionError', 'MongoServerSelectionError', 'MongoNetworkError', 'MongoNetworkTimeoutError']
+      .includes(err.name) ||
+    /buffering timed out|Client must be connected|connection .* closed/i.test(err.message || '');
+  if (dbUnavailable) {
+    return sendError(res, 'Database is temporarily unavailable. Please try again in a few seconds.', null, 503);
+  }
+
   // 1. Mongoose Bad ObjectId / CastError
   if (err.name === 'CastError') {
     const message = `Invalid resource identifier: ${err.value}`;

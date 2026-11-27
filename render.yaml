@@ -4,6 +4,9 @@ services:
     env: node
     buildCommand: npm install
     startCommand: npm start
+    # Render restarts the service automatically if this stops returning 200
+    # (it returns 503 when MongoDB is not connected).
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
@@ -18,7 +21,7 @@ services:
       - key: JWT_REFRESH_EXPIRES_IN
         value: 7d
       - key: CLIENT_URL
-        sync: false
+        value: https://hr-dashboard-1-9c41.onrender.com,https://hrsystem-zzhg.onrender.com
       - key: SEED_ADMIN_EMAIL
         sync: false
       - key: SEED_ADMIN_PASSWORD

@@ -9,7 +9,7 @@ const socketService = require('./services/socketService');
 
 // 1. Load environment variables
 const env = require('./config/env');
-const { connectDB } = require('./config/db');
+const { connectDB, disconnectDB } = require('./config/db');
 const logger = require('./utils/logger');
 
 // Middleware imports
@@ -191,15 +191,26 @@ if (require.main === module) {
       process.exit(1);
     });
 
-  // Handle unhandled promise rejections
-  process.on('unhandledRejection', (err) => {
-    logger.error(`UNHANDLED REJECTION! Shutting down... ${err.name}: ${err.message}`, err.stack);
-    if (server) {
-      server.close(() => process.exit(1));
-    } else {
-      process.exit(1);
-    }
+  // A rejected promise that nobody handled (e.g. one failed DB call in a
+  // background task) must not take the whole API and its DB connection down.
+  // Log it and keep serving; the request that caused it already got an error.
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error(`UNHANDLED REJECTION (server kept running): ${err.name}: ${err.message}`, err.stack);
   });
+
+  // Render sends SIGTERM on every deploy/restart: stop accepting requests and
+  // close the MongoDB connection cleanly instead of dropping it mid-request.
+  const shutdown = (signal) => {
+    logger.info(`${signal} received. Closing HTTP server and MongoDB connection...`);
+    server.close(async () => {
+      await disconnectDB();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 
   // Handle uncaught exceptions
   process.on('uncaughtException', (err) => {
