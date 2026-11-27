@@ -18,7 +18,7 @@ services:
       - key: JWT_REFRESH_EXPIRES_IN
         value: 7d
       - key: CLIENT_URL
-        sync: false
+        value: https://hr-dashboard-1-9c41.onrender.com,https://hrsystem-zzhg.onrender.com
       - key: SEED_ADMIN_EMAIL
         sync: false
       - key: SEED_ADMIN_PASSWORD
