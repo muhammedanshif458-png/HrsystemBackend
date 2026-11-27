@@ -4,6 +4,9 @@ services:
     env: node
     buildCommand: npm install
     startCommand: npm start
+    # Render restarts the service automatically if this stops returning 200
+    # (it returns 503 when MongoDB is not connected).
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
